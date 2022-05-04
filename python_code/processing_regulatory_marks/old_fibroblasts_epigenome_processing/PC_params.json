@@ -1,0 +1,10 @@
+{
+  "HIC_DIR": "/home/braunger/masterthesis/data/hic_data/old_fibroblasts/",
+  "PROCESSED_HIC_PC_DIR":"/home/braunger/masterthesis/save/processed_hic_data/processed_hic_data_old_fibroblasts/intrachromosomal_PCs/",
+  "HIC_FILENAME": "ENCFF768UBD_hg19.hic",
+  "HIC_CELLTYPE": "old_fibroblasts",
+  "HIC_RESOLUTION": 250000,
+  "HIC_RESOLUTION_STR": "250kb",
+  "chrs": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ,11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
+  "input_type": "correlation"
+}

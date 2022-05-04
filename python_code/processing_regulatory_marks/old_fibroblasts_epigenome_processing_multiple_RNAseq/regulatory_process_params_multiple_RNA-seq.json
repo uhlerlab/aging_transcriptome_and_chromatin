@@ -1,0 +1,13 @@
+{
+  "GENOME_DIR": "/home/braunger/masterthesis/data/genome_data/",
+  "PROCESSED_HIC_DATA_DIR": "/home/braunger/masterthesis/save/processed_hic_data/processed_hic_data_old_fibroblasts/final_BP250000_intraKR_interINTERKR/",
+  "EPIGENOME_DIR": "/home/braunger/masterthesis/data/regulatory_data/regulatory_data_old_fibroblasts/",
+  "PROCESSED_EPIGENOME_DIR": "/home/braunger/masterthesis/save/processed_regulatory_marks/processed_epigenome_data_old_fibroblasts_multiple_RNAseq/",
+  "RNA-SEQ_FILENAME": "GSM2072585_ENCFF913ZKI_transcript_quantifications_hg19.tsv",
+  "RNA-SEQ_FILENAME_2": "ENCFF939EPV.tsv",
+  "RNA-SEQ_FILENAME_3": "ENCFF913ZKI.tsv",
+  "HIC_CELLTYPE": "old_fibroblasts",
+  "HIC_RESOLUTION": 250000,
+  "HIC_RESOLUTION_STR": "250kb",
+  "chrs": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ,11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+}
