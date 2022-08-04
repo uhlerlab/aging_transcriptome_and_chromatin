@@ -1,0 +1,392 @@
+---
+title: "Prizes for DE genes and TFs"
+author: "Jana Braunger"
+date: '2022-05-11'
+output: BiocStyle::html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+file_path <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
+figdir = paste0(file_path, "Figures/DE_genes/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr )
+library(ggplot2)
+library(ggfortify)
+library(dplyr)
+library(GGally)
+library(ggpubr)
+library(pheatmap)
+library(RColorBrewer)
+library(biomaRt)
+library(UpSetR)
+```
+
+
+# Load RNAseq data
+
+```{r load_data}
+data <- read.delim(paste0(file_path, "Data/GSE113957_fpkm.txt"), 
+                                     sep = "\t", header = TRUE) %>%
+  # filter protein coding transcripts
+  filter(grepl('protein-coding', Annotation.Divergence)) 
+data[1:3, 1:10]
+dim(data)
+```
+
+# Data preprocessing
+## Gene annotations
+```{r}
+mart <- useEnsembl(biomart = "ensembl", 
+                   dataset = "hsapiens_gene_ensembl", 
+                   mirror = "useast")
+genes <- data$Transcript.ID
+gene_annotations <- getBM(filters="refseq_mrna", 
+                          attributes=c("refseq_mrna", "ensembl_gene_id", 
+                                       "chromosome_name", "start_position", 
+                                       "end_position", "external_gene_name", 
+                                       "hgnc_symbol", "description", 
+                                       "ensembl_peptide_id"), 
+                          values=genes, mart=mart) %>%
+  data.frame() %>%
+  group_by(refseq_mrna) %>%
+  summarise(ensembl_id = first(ensembl_gene_id), 
+            chr = first(chromosome_name),
+            start = first(start_position), 
+            end = first(end_position),
+            symbol = first(hgnc_symbol), 
+            description = first(description),
+            peptide_id = first(ensembl_peptide_id))
+
+write.csv(gene_annotations, paste0(file_path, "Data/biomart.csv"), row.names = FALSE)
+
+head(gene_annotations, n = 3)
+```
+
+
+## Rename from Refseq ID to Ensembl ID
+```{r }
+data_ens <- data  %>%
+  rename(refseq_mrna = Transcript.ID) %>%
+  # add ensembl gene id 
+  left_join(., subset(gene_annotations, select = c(refseq_mrna, symbol)), by = "refseq_mrna") %>%
+  filter(symbol != "") 
+```
+
+
+## Convert to long format
+```{r}
+data_long <- subset(data_ens, select = -c(chr, start, end, strand, Length, Copies, Annotation.Divergence, refseq_mrna)) %>%
+  #convert to long format
+  gather(key = "name", value = "value", -c("symbol")) %>%
+  #split name column into information categories
+  separate(name, c("id", "age", "sex", "nationality"), sep = "_") %>%
+  #remove patients with HGPS (premature aging disease)
+  filter(!grepl('HGPS', sex)) %>% 
+  #remove months from age
+  mutate(age = gsub("y[rs]\\d+mos", "", age)) %>%
+  #remove "yr" in age column to have the age as a number in all samples
+  mutate(age = str_replace_all(age, c("yr" = "", "YR" = ""))) %>%
+  mutate(age = as.integer(age)) %>%
+  #rename sex to "female" and "male"
+  mutate(sex = str_replace_all(sex, c("Female" = "female", "F" = "female", 
+                                      "Male" = "male", "M" = "male"))) %>%
+  rename(gene = symbol) %>%
+  #mean over values from that come from different Refseq-IDs, but map to the same symbol
+  group_by(gene, id, age, sex, nationality) %>%
+  summarize(value = mean(value)) %>%
+  ungroup() %>%
+  # transformation from FPKM to TPM
+  group_by(id) %>%
+  mutate(value = value / sum(value) * 10**6)
+head(data_long, n = 3)
+```
+
+```{r}
+#round age down to 10 year intervals
+data_long %<>% mutate(age = plyr::round_any(age, 10, f = floor))
+
+df_pca <- spread(data_long, key = gene, value = value) %>%
+  mutate(age = factor(age, levels = seq(0,90, 10)))
+
+pca <- prcomp(df_pca[, 5:ncol(df_pca)])
+
+autoplot(pca, data = df_pca, colour = "age", x = 1, y = 2)  + 
+  theme_bw() +
+  theme(text = element_text(size = 20))
+```
+
+
+
+
+
+## Mean over all samples with the same age 
+```{r}
+#round age down to 10 year intervals
+data_long %<>% mutate(age = plyr::round_any(age, 10, f = floor))
+
+# get mean expression per age
+data_mean <- group_by(data_long, gene, age) %>%
+  summarize(mean = mean(value)) %>%
+  mutate(age = as.integer(age)) %>%
+  #sort rows by age
+  arrange(age) 
+head(data_mean, n = 3)
+age <- unique(data_mean$age)
+```
+
+
+## Filter highly expressed genes
+```{r}
+selected_genes <- group_by(data_mean, gene) %>%
+  summarize(max = max(mean)) %>%
+  filter(max > 0.1)
+
+print(paste0(nrow(selected_genes), " genes with TPM > 0.1 in at least one age group were selected out of ", length(unique(data_mean$gene)), " genes in total."))
+
+data_filtered <- filter(data_mean, gene %in% selected_genes$gene) %>%
+  # add pseudo-count
+  mutate(mean = mean + 0.1) 
+```
+
+
+```{r hist_TPM_filtered, include=FALSE}
+## Visualize the TPM distribution 
+ggplot(data_filtered, aes(x = mean)) +
+  geom_histogram(bins = 100) +
+  #scale_y_continuous(trans='log2') +
+  xlab('TPM') +
+  ylab('log2(counts)')
+```
+
+```{r}
+# conversion to wide format
+data_filtered %<>% spread(key = age, value = mean)
+head(data_filtered, n = 3)
+```
+
+
+# Selection of differentially expressed genes
+## Calculate log2 fold change
+```{r}
+age_steps <- seq(0, 80, 10)
+data_fc <- lapply(age_steps, function(t0) {
+  t1 <- t0 + 10
+  # calculate log2 foldchange between two age intervals 
+  fc <- log2(data_filtered[, toString(t1)] / data_filtered[, toString(t0)])
+  colnames(fc) <- "log2_fc"
+  df <- tibble(gene = data_filtered$gene, 
+               TPM_t0 = unlist(data_filtered[, toString(t0)]),
+               TPM_t1 = unlist(data_filtered[, toString(t1)]), 
+               fc, 
+               transition = paste0('fc_', t0, '_', t1))
+  return(df)}) %>%
+  bind_rows() %>%
+  mutate(abs_log2_fc = abs(log2_fc)) %>%
+  arrange(desc(abs_log2_fc))
+
+head(data_fc, n = 3)
+```
+
+
+## Select 10% of genes with highest abs fc per time step
+```{r}
+# select 10% with highest fc per interval
+quantiles = group_by(data_fc, transition) %>%
+     summarize(threshold = quantile(abs(log2_fc), 0.9))
+quantiles
+data_fc %<>% left_join(quantiles) %>%
+  mutate(selected = ifelse(abs_log2_fc > threshold, 'true', 'false')) %>%
+  mutate(selected = factor(selected, levels = c('true', 'false')))
+
+fc_top <- filter(data_fc, selected == 'true') %>%
+  subset(select = c(transition, gene, TPM_t0, TPM_t1, log2_fc, abs_log2_fc))
+head(fc_top, n = 3)
+```
+
+
+## Visualizations of DE genes
+### Distribution of fold changes
+```{r hist_fc}
+ggplot(data_fc, aes(x = abs(log2_fc), fill = selected)) + 
+  geom_histogram(bins = 100) + 
+  facet_wrap(~transition) +
+  theme_bw() + 
+  xlab('absolute log2 fold change') +
+  theme(text = element_text(size = 15)) +
+  scale_fill_manual(values = c("true" = "red",
+                                "false"="darkgrey"))
+```
+
+
+### Intersection of DE genes
+```{r upset, fig.height = 9, fig.width = 18}
+#split fc_top into list of groups
+top_list <- fc_top %>% group_by(transition) %>% group_split()
+names(top_list) <- unique(fc_top$transition)
+top_list <- lapply(top_list, function(list) list$gene)
+
+upset(fromList(top_list), order.by = "freq", nsets = 9,
+       mainbar.y.label = "Intersections", sets.x.label = "DE Genes",
+       text.scale = c(2.5, 2.5, 2, 2, 2.5, 2.5), nintersects = 30)
+```
+
+
+### Gene expression of following age intervals
+```{r TPM, fig.height = 6}
+ggplot(data_fc, aes(x = log2(TPM_t0 + 1), y = log2(TPM_t1 + 1), color = selected)) + 
+  geom_point(size = 0.5) + 
+  facet_wrap(~transition) + 
+  theme_bw() +
+  scale_color_manual(values = c("true" = "red",
+                                "false"="darkgrey")) + 
+  geom_smooth(method='lm', color = 'black', size = 0.3) +
+  theme(text = element_text(size = 15))
+```
+
+
+### Distribution of the prizes
+```{r de_prizes}
+ggplot(fc_top, aes(x = abs_log2_fc, fill = transition)) +
+  geom_histogram(bins = 50)+
+  facet_wrap(~transition) +
+  xlim(c(0,2))+
+  xlab('prizes for DE genes') +
+  theme_bw()
+```
+
+
+```{r}
+# Prize statistics
+filter(fc_top, transition == "fc_0_10") %>%
+  summarize(min = min(abs_log2_fc),
+            max = max(abs_log2_fc), 
+            mean = mean(abs_log2_fc),
+            median = median(abs_log2_fc))
+```
+
+
+## Saving DE results data frame
+```{r}
+write.csv(fc_top, paste0(file_path, "Data/fc_top10.csv"), row.names = FALSE)
+```
+
+
+# Prize highly-expressed TFs
+## Fibroblast TFs
+```{r}
+# List of TFs
+TFs <- c('BDP1', 'BRD7', 'BRF1', 'BRF2', 'CEBPB', 'CHD1', 'CHD7', 'CREBBP',
+       'CTCF', 'E2F7', 'EP300', 'FOXA2', 'GTF2B', 'GTF2I', 'KDM1A',
+       'KLF4', 'LMNB1', 'MAFK', 'MAZ', 'MITF', 'MXI1', 'MYC', 'PCGF2',
+       'PGBD3', 'PHF8', 'PIAS4', 'POLR2A', 'POU5F1', 'PRKDC', 'RAD21',
+       'RB1', 'RBL1', 'RBL2', 'RCOR1', 'RFX5', 'SNAPC1', 'SNAPC2',
+       'SNAPC4', 'SNAPC5', 'SOX2', 'SPI1', 'STAG1', 'SUMO1', 'SUMO2',
+       'TERF1', 'TP53', 'UBE2I', 'GATA4')
+```
+
+
+```{r}
+TF_expr <- filter(data_filtered, gene %in% TFs) %>%
+  gather(key = age, value = TPM, -gene) %>%
+  ungroup() %>%
+  # filter for highly expressed TFs
+  filter(TPM > quantile(TPM, 0.5))  
+head(TF_expr)
+```
+
+```{r TF_expression}
+ggplot(TF_expr, aes(x = age, y = TPM, group = gene, color = gene)) +
+  geom_line() +
+  theme_bw() + 
+  facet_wrap(~gene)
+```
+
+```{r}
+TF_prizes <- TF_expr %>%
+  mutate(log2_TPM = log2(TPM+1)) %>% 
+  mutate(prize = min(quantiles$threshold))
+head(TF_prizes)
+```
+
+
+```{r}
+write.csv(TF_prizes, paste0(file_path, "Data/TF_prizes_fibroblasts.csv"), row.names = FALSE)
+```
+
+
+## TFs from all cell types
+```{r}
+# List of TFs
+tf_targets <- read.delim(paste0(file_path, "Data/tf-target-information.txt"), 
+           sep = "\t", header = TRUE)
+TFs <- unique(tf_targets$TF)
+
+prizes_all_TFs <- filter(data_filtered, gene %in% TFs) %>%
+  gather(key = age, value = TPM, -gene) %>%
+  ungroup() %>%
+  # filter for highly expressed TFs
+  filter(TPM > quantile(TPM, 0.5)) %>%
+  mutate(log2_TPM = log2(TPM+1)) %>% 
+  mutate(prize = min(quantiles$threshold))
+
+write.csv(prizes_all_TFs, paste0(file_path, "Data/TF_prizes_allTFs.csv"), row.names = FALSE)
+```
+
+
+# Expression for TF target interactions
+```{r}
+steps = c("0_10_20", "10_20_30", "20_30_40", "30_40_50", 
+          "40_50_60", "50_60_70", "60_70_80", "70_80_90")
+age_steps <- data.frame(age = as.character(seq(10, 80, 10)), 
+                        step = steps)
+
+# expression of TFs at time t+1 for each step
+TF_expr <- filter(data_filtered, gene %in% TFs) %>%
+  gather(key = age, value = TPM, -gene) %>%
+  filter(age > 0, age < 90) %>%
+  left_join(age_steps) %>%
+  subset(select = c(step, gene, TPM))
+colnames(TF_expr) = c("step", "TF", "TF_TPM")
+  
+# log2 foldchange of targets at time t+1 vs. t+2 for each step
+transition_steps <- data.frame(step = steps, 
+                               transition = c("fc_10_20", "fc_20_30", "fc_30_40", "fc_40_50",
+                                              "fc_50_60", "fc_60_70", "fc_70_80", "fc_80_90"))
+targets_fc <- filter(fc_top, transition != "fc_0_10") %>%
+  left_join(transition_steps) %>%
+  subset(select = c(step, gene, log2_fc)) 
+colnames(targets_fc) <- c("step", "target", "target_log2_fc")
+
+# tf-targets interactions with expression values
+tf_targets_expr <- subset(tf_targets, select = c(TF, target)) %>%
+  left_join(TF_expr, by = 'TF') %>%
+  inner_join(targets_fc, by = c('target', 'step'))
+
+head(tf_targets_expr)
+```
+
+
+# Expression of selected TFs
+```{r expr_selected_TFs, fig.width=12}
+TFs <- c('HDAC6', 'FOXO3', 'PCGF2', 'TCF4', 'GATA3', 'ONECUT1', 'UBN1', 'GATA4',
+         'NR3C1', 'MTA3', 'HNF1B', 'HOXB13', 'GLIS1', 'AR', 'IRF2')
+
+TF_expr <- filter(data_filtered, gene %in% TFs) %>%
+  gather(key = age, value = TPM, -gene) 
+
+ggplot(TF_expr, aes(x = age, y = TPM, group = gene, color = gene)) +
+  geom_line() +
+  theme_bw() + 
+  facet_wrap(~gene, scales = "free_y")
+```
+
+

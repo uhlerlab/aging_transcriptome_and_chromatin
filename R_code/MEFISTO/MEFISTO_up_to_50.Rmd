@@ -1,0 +1,528 @@
+---
+title: "MEFISTO_up_to_50"
+author: "Jana"
+date: '2022-05-09'
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+# Set path
+file_path <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/MOFA/"
+
+# Set options for the figures
+figdir = paste0(file_path, "Figures/up_to_50/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+
+# Not use exponential representation of numbers
+options(scipen = 999) 
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr )
+library(ggplot2)
+library(ggfortify)
+library(MOFA2)
+library(dplyr)
+library(MOFAdata)
+library(GGally)
+library(ggpubr)
+library(pheatmap)
+library(RColorBrewer)
+library(biomaRt)
+library(glmnet)
+library(VennDiagram)
+library(UpSetR)
+```
+
+
+# Data preprocessing
+## RNAseq data
+```{r load_data}
+data <- read.delim(paste0(file_path, "Data/GSE113957_fpkm.txt"), 
+                                     sep = "\t", header = TRUE) %>%
+  # filter protein coding transcripts
+  filter(grepl('protein-coding', Annotation.Divergence)) 
+data[1:5, 1:10]
+dim(data)
+```
+
+
+## Gene annotations
+```{r}
+mart <- useEnsembl(biomart = "ensembl", 
+                   dataset = "hsapiens_gene_ensembl", 
+                   mirror = "uswest")
+genes <- data$Transcript.ID
+gene_annotations <- getBM(filters="refseq_mrna", 
+                          attributes=c("refseq_mrna", "ensembl_gene_id", 
+                                       "chromosome_name", "start_position", 
+                                       "end_position", "external_gene_name", "description"), 
+                          values=genes, mart=mart) %>%
+  data.frame() %>%
+  group_by(refseq_mrna) %>%
+  summarise(ensembl_id = first(ensembl_gene_id), 
+            chr = first(chromosome_name),
+            start = first(start_position), 
+            end = first(end_position),
+            symbol = first(external_gene_name), 
+            description = first(description))
+
+head(gene_annotations)
+```
+
+## Rename from Refseq ID to Ensembl ID
+```{r }
+data_ens <- data  %>%
+  rename(refseq_mrna = Transcript.ID) %>%
+  # add ensembl gene id 
+  left_join(subset(gene_annotations, select = c(refseq_mrna, ensembl_id)), by = "refseq_mrna") 
+```
+
+
+## Convert to long format and remove all that are older than 50
+```{r}
+data_long <- subset(data_ens, select = -c(chr, start, end, strand, Length, Copies, Annotation.Divergence, refseq_mrna)) %>%
+  #convert to long format
+  gather(key = "name", value = "value", -c("ensembl_id")) %>%
+  #split name column into information categories
+  separate(name, c("id", "age", "sex", "nationality"), sep = "_") %>%
+  #remove patients with HGPS (premature aging disease)
+  filter(!grepl('HGPS', sex)) %>% 
+  #remove months from age
+  mutate(age = gsub("y[rs]\\d+mos", "", age)) %>%
+  #remove "yr" in age column to have the age as a number in all samples
+  mutate(age = str_replace_all(age, c("yr" = "", "YR" = ""))) %>%
+  mutate(age = as.integer(age)) %>%
+  #rename sex to "female" and "male"
+  mutate(sex = str_replace_all(sex, c("Female" = "female", "F" = "female", 
+                                      "Male" = "male", "M" = "male"))) %>%
+  #mean over values from that come from different Refseq-IDs, but map to the same ensembl id
+  group_by(ensembl_id, id, age, sex, nationality) %>%
+  summarize(value = mean(value)) %>%
+  ungroup() %>%
+  #filter ages to include
+  filter(age < 60)
+head(data_long)
+```
+
+
+## Visualize number of individuals per age
+```{r hist_ages, fig.height=4}
+samples <- subset(data_long, select = c(id, age, sex, nationality)) %>%
+  distinct()
+print(paste0('The dataset includes RNAseq samples from ', nrow(samples), ' patients.'))
+
+ggplot(samples, aes(x = age, group = sex, fill = sex)) +
+  geom_bar() +
+  theme_bw() + 
+  ylab('number of individuals') +
+  theme(text = element_text(size = 17))
+```
+
+
+## Bin age into 10 years intervals
+```{r hist_age_intervals, fig.height=4}
+#round age down to 10 year intervals
+data_long %<>% mutate(age_group = plyr::round_any(age, 10, f = floor))
+
+#plot age distribution over the intervals
+samples_binned <- subset(data_long, select = c(id, age_group, sex, nationality)) %>%
+  distinct()
+ggplot(samples_binned, aes(x = age_group, group = sex, fill = sex)) +
+  geom_bar() +
+  theme_bw() + 
+  xlab('age intervals') +
+  ylab('number of individuals') +
+  theme(text = element_text(size = 17))
+```
+
+
+## Mean over all samples with the same age and log-transform the values
+```{r}
+# get mean expression per age
+data_mean <- group_by(data_long, ensembl_id, age_group) %>%
+  summarize(mean = mean(value)) %>%
+  mutate(age_group = as.integer(age_group)) %>%
+  #sort rows by age
+  arrange(age_group) %>%
+  #log transformation
+  mutate(mean = log(mean + 1))
+head(data_mean)
+age <- unique(data_mean$age_group)
+```
+
+
+## Filter highly expressed genes
+```{r}
+selected_genes <- group_by(data_mean, ensembl_id) %>%
+  summarize(max = max(mean)) %>%
+  filter(max > log(0.1+1))
+
+print(paste0(nrow(selected_genes), " genes with FPKM > 0.01 in at least one age group were selected out of ", length(unique(data_mean$ensembl_id)), " genes in total."))
+
+data_filtered <- filter(data_mean, ensembl_id %in% selected_genes$ensembl_id) 
+```
+
+
+## Select 2000 most variable genes 
+```{r}
+var <- group_by(data_filtered, ensembl_id) %>%
+  # get var per gene over all ages
+  summarize(variance = var(mean)) %>%
+  arrange(desc(variance)) %>%
+  top_n(2000)
+head(var)
+```
+
+```{r}
+filtered_data <- filter(data_filtered, ensembl_id %in% var$ensembl_id) 
+```
+
+
+## PCA as a quality control
+```{r pca}
+data_wide <- spread(filtered_data, key = age_group, value = mean)
+head(data_wide)
+
+df_pca <- ungroup(data_wide)%>%
+  subset(select = -c(ensembl_id))%>%
+  t() %>%
+  data.frame()%>%
+  mutate(age_group = colnames(data_wide[-1])) %>%
+  mutate(age_group = factor(age_group, levels = age_group, order = TRUE))
+
+pca <- prcomp(df_pca[, 1:ncol(df_pca)-1])
+autoplot(pca, data = df_pca, colour = "age_group")  + 
+  theme_bw() + 
+  theme(text = element_text(size = 20))
+```
+
+# MEFISTO
+## Create MEFISTO object
+```{r}
+df_mefisto <- subset(filtered_data, select = c("age_group", "ensembl_id", "mean")) %>%
+  mutate(view = "single_view") 
+colnames(df_mefisto) <- c("sample", "feature", "value", "view")
+head(df_mefisto)
+
+# df with the corresponding covariate (age) for each sample 
+time <- data.frame(sample = age, covariate = "age", value =  age)
+```
+
+```{r}
+mefisto <- create_mofa(df_mefisto)
+mefisto <- set_covariates(mefisto, covariates = time)
+print(mefisto)
+```
+
+## Define options
+```{r}
+data_opts <- get_default_data_options(mefisto)
+
+model_opts <- get_default_model_options(mefisto)
+model_opts$num_factors <- 3
+
+train_opts <- get_default_training_options(mefisto)
+
+mefisto_opts <- get_default_mefisto_options(mefisto)
+
+mefisto <- prepare_mofa(mefisto, model_options = model_opts,
+                   mefisto_options = mefisto_opts,
+                   training_options = train_opts,
+                   data_options = data_opts)
+```
+
+
+## Build and train the MOFA object
+```{r}
+outfile = (paste0(file_path, "models/MEFISTO_up_to_50.hdf5"))
+trained_model <- run_mofa(mefisto, outfile)
+```
+
+# Downstream Analysis
+```{r variance_explained}
+plot_variance_explained(trained_model)
+```
+
+
+```{r factors_time}
+plot_factors_vs_cov(trained_model) + 
+  geom_line()+
+  theme_bw()+ 
+  theme(text = element_text(size = 15))
+```
+
+
+```{r heatmap_genes_highest_weight, fig.width=10}
+plot_data_heatmap(trained_model,
+  view = "single_view",         # view of interest
+  factor = 1,             # factor of interest
+  features = 15,          # number of features to plot (they are selected by weight)
+  
+  # extra arguments that are passed to the `pheatmap` function
+  cluster_rows = TRUE, cluster_cols = TRUE,
+  show_rownames = TRUE, show_colnames = TRUE, fontsize = 15) 
+```
+
+
+# GSEA with MSigDB gene sets
+## Run GSEA on weights with positive sign
+```{r}
+utils::data("MSigDB_v6.0_C5_human") 
+enrichment.parametric <- run_enrichment(trained_model,
+  view = "all", factors = 1:3,
+  feature.sets = MSigDB_v6.0_C5_human,
+  sign = "positive",
+  statistical.test = "parametric"
+)
+```
+
+
+**Factor 1**
+```{r gsea_msig_f1_pos}
+plot_enrichment(enrichment.parametric, 
+  factor = 1, 
+  max.pathways = 5) +
+  theme_classic(base_size = 15)
+```
+
+## Run GSEA on weights with positive sign
+```{r}
+utils::data("MSigDB_v6.0_C5_human") 
+enrichment.parametric <- run_enrichment(trained_model,
+  view = "all", factors = 1:3,
+  feature.sets = MSigDB_v6.0_C5_human,
+  sign = "negative",
+  statistical.test = "parametric"
+)
+```
+
+
+**Factor 1**
+```{r gsea_msig_f1_neg}
+plot_enrichment(enrichment.parametric, 
+  factor = 1, 
+  max.pathways = 5) +
+  theme_classic(base_size = 15)
+```
+
+
+# Comparison to MEFISTO model on all ages
+```{r}
+model_all_ages <- load_model(paste0(file_path, "models/MEFISTO_3f.hdf5"))
+
+# function to get loadings of the first factor
+get_loadings_f1 <- function(model, ages){
+  weights <- get_weights(model, views = "all", factors = "Factor1", scale = F, as.data.frame = TRUE) %>%
+    mutate(value = value/max(abs(value)))
+  colnames(weights) <- c("ensembl_id", "factor", "value", "view")
+  weights <- weights[order(abs(weights$value), decreasing = TRUE), ] %>%
+    left_join(subset(gene_annotations, select = c(ensembl_id, symbol, description))) %>%
+    subset(select = c(ensembl_id, value)) %>%
+    mutate(name = ages) %>%
+    distinct()
+}
+
+loadings <- bind_rows(get_loadings_f1(model_all_ages, 'all_ages'), 
+                      get_loadings_f1(trained_model, 'up_to_50')) %>%
+  spread(key = name, value = value)
+
+cor(loadings$all_ages, loadings$up_to_50, use="complete.obs")
+```
+
+```{r model_corr}
+ggplot(loadings, aes(x = all_ages, y = up_to_50)) + 
+  geom_point(size = 0.5) + 
+  xlab('loadings factor 1 for 0-96 years model') +
+  ylab('loadings factor 1 for 0-59 years model') +
+  theme_bw() +
+  geom_smooth(method='lm', color = 'black', size = 0.3) +
+  theme(text = element_text(size = 15))
+```
+
+
+
+
+## Genes with highest weights in factor 1
+**Get weight matrix**
+```{r}
+weights <- get_weights(trained_model, views = "all", factors = "all", scale = F, as.data.frame = TRUE) %>%
+  group_by(factor, view) %>% 
+  mutate(value = value/max(abs(value))) %>% 
+  ungroup() 
+colnames(weights) <- c("ensembl_id", "factor", "value", "view")
+weights <- weights[order(abs(weights$value), decreasing = TRUE), ] %>%
+  left_join(subset(gene_annotations, select = c(ensembl_id, symbol, description)))
+head(weights)
+```
+
+## Select the six genes with highest absolute weight in factor 1
+```{r}
+selected_genes_pos <- filter(weights, factor == "Factor1") %>%
+  top_n(5, value)
+selected_genes_neg <- filter(weights, factor == "Factor1") %>%
+  top_n(5, -value)
+selected_genes <- bind_rows(selected_genes_pos, selected_genes_neg)
+
+selected_genes
+```
+
+## Plot expression of selected genes during aging
+```{r f1_expression_over_time, fig.width=10, fig.height = 5}
+df_plot = data_mean %>%
+  left_join(subset(gene_annotations, select = c(ensembl_id, symbol))) %>%
+  filter(ensembl_id %in% selected_genes$ensembl_id) %>%
+  mutate(symbol = factor(symbol, levels = selected_genes$symbol))
+
+ggplot(df_plot, aes(x = age_group, y = mean, col = age_group)) + 
+    geom_point() + 
+    geom_line() +
+    facet_wrap(~ symbol, scales = "free", ncol = 5) +
+    theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) +
+    labs(y = "normalized gene expression (log FPKM)")  +
+    theme_bw() + 
+    theme(text = element_text(size = 15))
+```
+
+
+## Save 10% of genes with highest positive and negative weight in factor 1
+```{r}
+weights_f1 <- filter(weights, factor == "Factor1") 
+# Select genes with highest positive weight
+top_genes_pos <- weights_f1 %>%
+  top_frac(0.1, value) %>%
+  left_join(subset(gene_annotations, select = c(ensembl_id, chr, start, end)), by = "ensembl_id") %>%
+  mutate(locus = paste0("chr_", chr, "_loc_", 
+                        plyr::round_any(start, 250000, floor))) %>%
+  subset(select = c(ensembl_id, value, symbol, locus))
+
+# Select genes with highest negative weight
+top_genes_neg <- weights_f1 %>%
+  top_frac(0.1, -value) %>%
+  left_join(subset(gene_annotations, select = c(ensembl_id, chr, start, end)), by = "ensembl_id") %>%
+  mutate(locus = paste0("chr_", chr, "_loc_", 
+                        plyr::round_any(start, 250000, floor))) %>%
+  subset(select = c(ensembl_id, value, symbol, locus))
+
+top_genes <- bind_rows(top_genes_pos, top_genes_neg)
+head(top_genes)
+
+# Save as csv
+write.csv(top_genes_pos, paste0(file_path, "Data/top_genes_pos_0.1_50.csv"), row.names = FALSE)
+write.csv(top_genes_neg, paste0(file_path, "Data/top_genes_neg_0.1_50.csv"), row.names = FALSE)
+```
+
+
+## Distribution of weights in factor 1
+
+```{r hist_weights}
+weights_f1$color <- factor(ifelse(weights_f1$symbol %in% top_genes$symbol, 
+                                  'selected_genes', 'others'), 
+                           levels = c('selected_genes', 'others'))
+ggplot(weights_f1, aes(x = value, fill = color)) + 
+  geom_histogram(bins = 100) +
+  theme_bw() + 
+  theme(text = element_text(size = 15))
+```
+
+```{r}
+# Number of genes with positive weight
+length(unique(filter(weights_f1, value > 0)$ensembl_id))
+# Number of genes with negative weight
+length(unique(filter(weights_f1, value < 0)$ensembl_id))
+```
+
+
+
+## Comparison with active loci in IMR90 and GM23248
+```{r}
+IMR90 <- read.csv(paste0(file_path, "Data/IMR90_cosine_wo_PC.txt")) %>%
+  rename(locus = X0) %>%
+  mutate(young_activity = "young-active")
+old_fibroblasts <- read.csv(paste0(file_path, "Data/old_fibroblasts_cosine_wo_PC.txt")) %>%
+  rename(locus = X0) %>%
+  mutate(old_activity = "old-active")
+
+# add for each gene whether corresponding loci is active or inactive based on the HiC clustering in IMR90 and GM23248
+activity <- top_genes_pos %>%
+  mutate(sign = 'positive') %>%
+  bind_rows(top_genes_neg %>% mutate(sign = 'negative')) %>%
+  mutate(sign = factor(sign, levels = c('positive', 'negative'))) %>%
+  left_join(IMR90) %>% 
+  replace_na(list(young_activity = "young-inactive")) %>%
+  left_join(old_fibroblasts) %>% 
+  replace_na(list(old_activity = "old-inactive")) %>%
+  mutate(development = factor(paste0(young_activity, "_", old_activity), 
+        levels = c("young-active_old-active", "young-active_old-inactive", "young-inactive_old-active", "young-inactive_old-inactive")))
+head(activity)
+```
+
+
+```{r development_activity, fig.width = 8}
+ggplot(activity, aes(x = development, fill = development)) +
+  geom_bar() +
+  facet_wrap(~sign) +
+  theme_bw() +
+  theme(axis.text.x=element_blank(), 
+        axis.ticks.x=element_blank()) + 
+  theme(text = element_text(size = 17))
+```
+
+## Linear regression of top 10 genes
+```{r}
+selected_genes <- filter(weights, factor == "Factor1") %>%
+  top_n(10, abs(value))
+
+df = data_long %>%
+  left_join(subset(gene_annotations, select = c(ensembl_id, symbol))) %>%
+  filter(ensembl_id %in% selected_genes$ensembl_id) %>%
+  subset(select = c(id, age, symbol, value)) %>%
+  mutate(value = log(value + 1)) %>%
+  spread(key = symbol, value = value)
+
+model <- lm(age ~ ., subset(df, select = -id))
+summary(model)
+```
+
+
+## LASSO
+```{r}
+df = data_long %>%
+  subset(select = c(id, age, ensembl_id, value)) %>%
+  mutate(value = log(value + 1)) %>%
+  filter(ensembl_id %in% filtered_data$ensembl_id) %>%
+  spread(key = ensembl_id, value = value)
+
+model <- glmnet(subset(df, select = -c(id, age)), df$age, alpha = 1, lambda = 0.01)
+lasso <- data.frame(ensembl_id = dimnames(coef(model))[[1]], coefficient = matrix(coef(model))) %>%
+  filter(coefficient > 0) %>%
+  left_join(subset(gene_annotations, select = c(ensembl_id, symbol))) %>%
+  filter(ensembl_id != "(Intercept)")
+head(lasso)
+```
+
+```{r}
+#length(which(lasso$symbol %in% top_genes$symbol)) / (nrow(df)-1)
+venn.diagram(list(pos_loadings = top_genes_pos$symbol, pos_lasso = filter(lasso, coefficient > 0)$symbol), filename = "venn_pos.png")
+venn.diagram(list(neg_loadings = top_genes_neg$symbol, neg_lasso = filter(lasso, coefficient > 0)$symbol), filename = "venn_neg.png")
+```
+
+
+```{r upset_lasso}
+list = list(MEFISTO_down = top_genes_pos$symbol, lasso_pos = filter(lasso, coefficient > 0)$symbol,
+            MEFISTO_up = top_genes_neg$symbol, lasso_neg = filter(lasso, coefficient < 0)$symbol)
+
+upset(fromList(list), order.by = "freq", nsets = 4,
+       mainbar.y.label = "Intersections", sets.x.label = "DE Genes",
+       text.scale = c(2.5, 2.5, 2, 2, 2.5, 2.5), nintersects = 10)
+```
+
+
+
+

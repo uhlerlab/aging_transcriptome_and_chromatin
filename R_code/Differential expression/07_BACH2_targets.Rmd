@@ -1,0 +1,277 @@
+---
+title: "07_BACH2_targets"
+author: "Jana Braunger"
+date: '2022-07-29'
+output: BiocStyle::html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
+figdir = paste0(dir, "Figures/BACH2/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+
+set.seed(202207)
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr)
+library(pheatmap)
+```
+
+# Load data
+## Comparison map 
+The comparison map was calculated as "young + 2 * old" with young and old being the
+binarized maps using the LAS algorithm. So, 0 means there is no interaction between
+the loci in both celltypes, 1 only an interaction (as part of a LAS) in young fibroblasts,
+2 only in old fibroblasts and 3 an interaction in both cells.
+
+```{r}
+comp_map <- read.delim(paste0(dir, "Data/difference_maps/comp_map_BACH2_targets.csv"), sep = ",") %>%
+  column_to_rownames('chr1')
+comp_map[1:4, 1:4]
+```
+
+## Louvain and hierarchical clusters
+```{r}
+louvain_clusters <- read.delim(paste0(dir, "Data/difference_maps/louvain_clusters_BACH2.csv"), sep = ",") %>%
+  mutate(cluster = paste0("cluster_", cluster))
+
+hierarchical_clusters <- read.delim(paste0(dir, "Data/difference_maps/hierarchical_clusters_BACH2.csv"), sep = ",") %>%
+  mutate(cluster = paste0("cluster_", cluster))
+
+head(hierarchical_clusters)
+```
+
+
+## Normalized RNAseq counts
+```{r}
+counts <- read.delim(paste0(dir, "Data/count_data.csv"), sep = ",")
+mean_counts <- read.delim(paste0(dir, "Data/mean_counts.csv"), sep = ",") %>%
+  group_by(gene, age_group) %>%
+  summarize(counts = mean(counts))
+head(mean_counts)
+```
+
+
+# Louvain clusters
+## Number of nodes per specificity type and cluster
+```{r}
+# get number of young- and old-specific, as well as shared interactions per locus
+edge_types = data.frame('locus' = rownames(comp_map))
+edge_types$young_specific <- rowSums(sapply(comp_map, '==', 1))
+edge_types$old_specific <- rowSums(sapply(comp_map, '==', 2))
+edge_types$shared <- rowSums(sapply(comp_map, '==', 3))
+edge_types$max_edges <- colnames(edge_types[1:nrow(edge_types),2:4])[max.col(edge_types[1:nrow(edge_types),2:4], 
+                                                     ties.method = "random")]
+
+# add number of edges per type to the cluster information
+results <- louvain_clusters %>%
+  left_join(edge_types) %>%
+  mutate(max_edges = factor(max_edges, levels = c('young_specific', 'shared', 'old_specific')))
+head(results)
+```
+
+```{r node_type_purity}
+ggplot(results, aes(x = max_edges, fill = max_edges)) +
+  geom_histogram(stat = "count") + 
+  facet_wrap(~cluster, scale = "free_y", ncol = 3) +
+  theme_bw() + 
+  theme(axis.text.x=element_blank(), 
+        axis.ticks.x=element_blank(), 
+        axis.title.x = element_blank()) + 
+  guides(fill=guide_legend(title="Node type")) +
+  ylab('Number of nodes per category') +
+  theme(text = element_text(size = 20))
+```
+
+## Average number of edges per type and cluster
+```{r mean_edges}
+mean_edges <- subset(results, select = c(locus, cluster,young_specific,
+                                         old_specific, shared)) %>%
+  gather(key = "type", value = value, -c(locus, cluster)) %>%
+  group_by(cluster, type) %>%
+  summarize(mean = mean(value)) %>%
+  mutate(type = factor(type, levels = c('young_specific', 'shared', 'old_specific')))
+
+ggplot(mean_edges, aes(x = type, y = mean, fill = type)) + 
+  geom_bar(stat = 'identity') + 
+  facet_wrap(~cluster, ncol = 3) +
+  theme_bw() + 
+  theme(axis.text.x=element_blank(), 
+        axis.ticks.x=element_blank(), 
+        axis.title.x = element_blank()) + 
+  guides(fill=guide_legend(title="Edge type")) +
+  ylab('Mean number of edges per locus') +
+  theme(text = element_text(size = 20))
+```
+
+## Distribution of the degrees 
+```{r degree_hist}
+results %<>% mutate(degree = rowSums(subset(results, select = c(young_specific, old_specific, shared))))
+ggplot(results, aes(x = degree, fill = cluster)) +
+  geom_histogram() + 
+  theme_bw() +
+  facet_wrap(~cluster)
+```
+
+
+## Expression patterns
+```{r expression_pattern}
+# Add expression values
+expr_targets <- inner_join(results, mean_counts) %>%
+  group_by(gene) %>%
+  mutate(counts = scale(counts)) %>%
+  ungroup() %>%
+  group_by(cluster, age_group) %>%
+  slice_max(order_by = degree, n = 10)
+
+ggplot(expr_targets, aes(x = age_group, y = counts, group = gene)) +
+  geom_line(alpha = 0.3) +
+  facet_wrap(~cluster, nrow = 2)+
+  geom_line(stat = "summary", fun = "median", colour = "brown", size = 1.2, aes(group = 1)) +
+  theme_bw()+
+  theme(text = element_text(size = 15))
+```
+
+# Hierarchical clustering
+## Expression patterns for cluster 4
+```{r expression_cluster4, fig.height = 3}
+# Get expression values for genes in cluster 4
+expr_targets <- inner_join(hierarchical_clusters, mean_counts) %>%
+  filter(cluster == "cluster_4") %>%
+  subset(select = c(gene, age_group, counts)) %>%
+  spread(key = age_group, value = counts) 
+
+# Create matrix
+hclust_matrix <- select(expr_targets, -gene) %>%
+  as.matrix()
+rownames(hclust_matrix) <- expr_targets$gene
+
+# Z-transform values for each gene
+hclust_matrix %<>% t() %>% scale() %>% t()
+
+# Calculate euclidean distances between genes
+gene_dist <- dist(hclust_matrix)
+
+# Clustering
+gene_hclust <- hclust(gene_dist, method = "ward.D2")
+
+# Plot dendrogram
+plot(gene_hclust, labels = FALSE)
+
+# Cut tree  
+gene_cluster <- cutree(gene_hclust, k = 3) %>% 
+  enframe() %>% 
+  dplyr::rename(gene = name, cluster = value) %>%
+  left_join(group_by(mean_counts, gene) %>% mutate(counts = scale(counts)))
+
+# Plot expression patterns
+ggplot(gene_cluster, aes(x = age_group, y = counts, group = gene)) +
+  geom_line(alpha = 0.3) +
+  facet_wrap(~cluster, nrow = 1)+
+  geom_line(stat = "summary", fun = "median", colour = "brown", size = 1.2, aes(group = 1)) +
+  theme_bw()  +
+  ylab('normalized RNAseq counts')+
+  theme(text = element_text(size = 14))
+```
+
+## Expression patterns for cluster 5
+```{r expression_cluster5, fig.height = 3}
+# Get expression values for genes in cluster 5
+expr_targets <- inner_join(hierarchical_clusters, mean_counts) %>%
+  filter(cluster == "cluster_5") %>%
+  subset(select = c(gene, age_group, counts)) %>%
+  spread(key = age_group, value = counts) 
+
+# Create matrix
+hclust_matrix <- select(expr_targets, -gene) %>%
+  as.matrix()
+rownames(hclust_matrix) <- expr_targets$gene
+
+# Z-transform values for each gene
+hclust_matrix %<>% t() %>% scale() %>% t()
+
+# Calculate euclidean distances between genes
+gene_dist <- dist(hclust_matrix)
+
+# Clustering
+gene_hclust <- hclust(gene_dist, method = "ward.D2")
+
+# Plot dendrogram
+plot(gene_hclust, labels = FALSE)
+
+# Cut tree  
+gene_cluster <- cutree(gene_hclust, k = 3) %>% 
+  enframe() %>% 
+  dplyr::rename(gene = name, cluster = value) %>%
+  left_join(group_by(mean_counts, gene) %>% mutate(counts = scale(counts)))
+
+# Plot expression patterns
+ggplot(gene_cluster, aes(x = age_group, y = counts, group = gene)) +
+  geom_line(alpha = 0.3) +
+  facet_wrap(~cluster, nrow = 1)+
+  geom_line(stat = "summary", fun = "median", colour = "brown", size = 1.2, aes(group = 1)) +
+  theme_bw() +
+  ylab('normalized RNAseq counts')+
+  theme(text = element_text(size = 14))
+```
+
+## Expression patterns for all BACH2 targets
+```{r expression_cluster_BACH2, fig.height = 3}
+# Get expression values for targets
+expr_targets <- inner_join(hierarchical_clusters, mean_counts) %>%
+  subset(select = c(gene, age_group, counts)) %>%
+  spread(key = age_group, value = counts) 
+
+# Create matrix
+hclust_matrix <- select(expr_targets, -gene) %>%
+  as.matrix()
+rownames(hclust_matrix) <- expr_targets$gene
+
+# Z-transform values for each gene
+hclust_matrix %<>% t() %>% scale() %>% t()
+
+# Calculate euclidean distances between genes
+gene_dist <- dist(hclust_matrix)
+
+# Clustering
+gene_hclust <- hclust(gene_dist, method = "ward.D2")
+
+# Plot dendrogram
+plot(gene_hclust, labels = FALSE)
+
+# Cut tree  
+gene_cluster <- cutree(gene_hclust, k = 6) %>% 
+  enframe() %>% 
+  dplyr::rename(gene = name, cluster = value) %>%
+  left_join(group_by(mean_counts, gene) %>% mutate(counts = scale(counts)))
+
+# Plot expression patterns
+ggplot(gene_cluster, aes(x = age_group, y = counts, group = gene)) +
+  geom_line(alpha = 0.3) +
+  facet_wrap(~cluster, nrow = 2)+
+  geom_line(stat = "summary", fun = "median", colour = "brown", size = 1.2, aes(group = 1)) +
+  theme_bw() +
+  ylab('normalized RNAseq counts')+
+  theme(text = element_text(size = 14))
+
+write.csv(gene_cluster, paste0(dir, "Data/BACH2_expression_clusters.csv"), row.names = FALSE)
+```
+
+
+
+
+
+
+
+
+## Expression patterns for all expressed genes
+
+
+

@@ -1,0 +1,140 @@
+---
+title: "04_TF-expression"
+author: "Jana Braunger"
+date: '2022-05-26'
+output: BiocStyle::html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
+figdir = paste0(dir, "Figures/TF_expr/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr)
+library(ggbeeswarm)
+```
+
+# Load count data
+```{r}
+counts <- read.delim(paste0(dir, "Data/count_data.csv"), sep = ",")
+mean_counts <- read.delim(paste0(dir, "Data/mean_counts.csv"), sep = ",")
+```
+
+
+# PCST groups
+```{r}
+plot_TF_expression <- function(TFs){
+  TF_expr <- filter(counts, gene %in% TFs) %>%
+    # if two ensembl ids correspond to the same TF take the mean count
+    group_by(gene, names, Age, age_group) %>%
+    summarize(counts = mean(counts)) 
+  
+  ggplot(TF_expr, aes(x = Age, y = counts, group = gene, color = gene)) +
+    geom_point(color = 'grey') +
+    theme_bw() + 
+    facet_wrap(~gene, scales = "free_y") +
+    theme(legend.position="none") + 
+    theme(text = element_text(size = 13),
+          strip.text.x = element_text(size = 16)) +
+    xlab("Age") + 
+    ylab("Normalized RNAseq counts") +
+    geom_smooth(color = "red")
+}
+
+plot_TF_mean_expression <- function(TFs){
+  TF_expr <- filter(counts, gene %in% TFs) %>%
+    # if two ensembl ids correspond to the same TF take the mean count
+    group_by(gene, names, Age, age_group) %>%
+    summarize(counts = mean(counts)) 
+  
+  ggplot(TF_expr, aes(x = age_group, y = counts, group = gene, color = gene)) +
+    geom_point(color = 'grey', alpha = 0.4) +
+    #geom_beeswarm(color = 'grey', cex = 3) +
+    theme_bw() + 
+    facet_wrap(~gene, scales = "free_y") +
+    theme(legend.position="none") + 
+    theme(text = element_text(size = 13),
+          strip.text.x = element_text(size = 16),
+          axis.text.x = element_text(angle = 90)) +
+    xlab("Age") + 
+    ylab("Normalized RNAseq counts") +
+    geom_line(stat = "summary", fun = "median", colour = "brown", size = 1, aes(group = 1))
+}
+```
+
+
+## Shared TFs
+```{r shared_TFs, fig.height=4}
+TFs <- c('AHR','FOXO3','GATA4','GTF2B','HIF1A','MAFF','MAZ','NOTCH1','NR2C2',
+ 'SRC','STAT1','STAT3','TCF7L2','TEAD4')
+plot_TF_expression(TFs) +facet_wrap(~gene, scales = "free_y", nrow = 3)
+```
+
+## Old-specific TFs
+```{r old_TFs, fig.height=4}
+TFs <- c('ASCL2','CDK9','CEBPA','CTCF','E2F1','EHF','GRHL3','KDM1A','KLF1',
+         'NCOR1','POLR2A', 'SIX5')
+
+plot_TF_expression(TFs)
+```
+
+## Young-specific TFs
+```{r young_TFs, fig.height=4}
+TFs <- c('ASCL1', 'CREBBP', 'ERG', 'FOXA1', 'RELA', 'SMAD3', 'SPIB', 'TP73', 'ZNF263')
+plot_TF_expression(TFs)+facet_wrap(~gene, scales = "free_y", nrow = 2)
+```
+
+
+## First network specific TFs
+```{r first_TFs}
+TFs <- c('CDK7','CTNNB1','EP300','FOXA2','GLI2','GLYR1','HOXA13','MEIS1',
+ 'MYBL2','NR5A2','PGR','PML','RNF2','STAT5A','TFAP2C')
+plot_TF_expression(TFs)
+```
+
+
+## Second network specific TFs
+```{r second_TFs}
+TFs <- c('AR','CHD4','ELK3','ESR1','FOXP2','NFYC','OTX2','RXRA','STAT5B','WDR5',
+ 'ZBTB33','ZEB1','ZFX','ZNF76','ZNF83')
+plot_TF_expression(TFs)
+```
+
+
+## Last network specific TFs
+```{r last_net}
+TFs <- c('ARNT','ATRX','BMI1','CLOCK','DDX5','FOS','MBD3','MYH11','NFIC',
+ 'PBX1','RBBP5','SMAD2','SMARCA4','TAF3')
+
+plot_TF_expression(TFs)
+```
+
+
+# Differentially expressed TFs
+```{r}
+TF_targets <- read.delim(paste0(dir, "Data/tf-target-information.txt"))
+p_0.05 <- read.delim(paste0(dir, "Data/DE_var_p_n_200.csv"), sep = ",")
+
+DE_TFs <- filter(p_0.05, gene %in% TF_targets$TF) %>%
+  filter(transition != "fc_61-85_86-96")
+head(DE_TFs)
+dim(DE_TFs)
+```
+
+```{r DE_TFs}
+plot_TF_expression(unique(DE_TFs$gene))
+```
+
+```{r DE_TFs_mean}
+plot_TF_mean_expression(unique(DE_TFs$gene))
+```
+
+

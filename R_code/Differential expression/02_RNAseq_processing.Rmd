@@ -1,0 +1,487 @@
+---
+title: "RNAseq processing and differential expression"
+author: "Jana Braunger"
+date: '2022-05-26'
+output: BiocStyle::html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
+figdir = paste0(dir, "Figures/RNAseq_processing/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr)
+library(tximeta)
+library(DESeq2)
+library(UpSetR)
+library(pheatmap)
+library(RColorBrewer)
+library(ggfortify)
+library(glmnet)
+library(EnhancedVolcano)
+library(umap)
+library(ggbeeswarm)
+```
+
+This markdown is based on [this](https://master.bioconductor.org/packages/release/workflows/vignettes/rnaseqGene/inst/doc/rnaseqGene.html) vignette and describes the processing of the FASTQ files from the RNAseq data of Fleischer et al., as well as performing a differential expression analysis. The differentially expressed genes are then used for building Steiner trees.
+
+# FASTQ files
+The FASTQ files from the study from [Fleischer et al.](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6300908/) were downloaded from the European Nucleotide Archive [ENA](https://www.ebi.ac.uk/ena/browser/home). The used accession numbers were: SRR7093809 - SRR7093951 
+
+
+# Transcript quantification with Salmon
+For the transcript quantification the tool salmon was used according to [this](https://combine-lab.github.io/salmon/getting_started/) vignette.
+For the quantification, first a reference transcriptome is needed for the alignment. A human reference transcriptome can be downloaded from [ensemblgenomes](http://ftp.ensembl.org/pub/release-105/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz). Release 105 was used instead of the newest one 106 because tximeta only works for versions up to 105 at the moment. Then salmon was used to build an index on that transcriptome (salmon index -t ../genome_data/Homo_sapiens.GRCh38.cdna.all.fa.gz -i grch38_index). Finally, the samples were quantified with: salmon quant -i grch38_index -l A -r /mnt/jana/fastq/{sample}.fastq.gz -p 8 --validateMappings -o quants/{sample}_quant. This command produces an output folder for each sample that contains the quant.sf file, which includes the count values, used in the following.
+
+
+# Obtaining count data
+## Reading in data with tximeta
+```{r}
+#20-bins
+age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
+                         age_group = c(rep('1-19', 19), rep('20-39', 20), 
+                                       rep('40-59', 20), rep('60-79', 20),
+                                       rep('80-96', 17)))
+#same number of patients per bin
+age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
+                         age_group = c(rep('1-19', 19), rep('20-35', 16), 
+                                       rep('36-61', 26), rep('62-84', 23),
+                                       rep('85-96', 12)))
+
+#small-big-small
+age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
+                         age_group = c(rep('1-9', 9), rep('10-29', 20), 
+                                       rep('30-59', 30), rep('60-79', 20),
+                                       rep('80-89', 10), rep('90-96', 7)))
+
+age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
+                         age_group = c(rep('1-15', 15), rep('16-37', 22), 
+                                      rep('38-57', 20), rep('58-85', 28),
+                                      rep('86-96', 11)))
+
+age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
+                         age_group = c(rep('1-15', 15), rep('16-26', 11), 
+                                      rep('27-60', 34), rep('61-85', 25),
+                                      rep('86-96', 11)))
+```
+
+
+```{r}
+# get info about the runs
+runs_info <- read.delim(paste0(dir, "Data/SraRunTable.txt"), sep = ",") %>%
+  mutate(Age = gsub("y[rs]\\d+mos", "", Age)) %>%
+  mutate(Age = gsub("yr", "", Age)) %>%
+  left_join(age_groups) %>%
+  mutate(age_group = factor(age_group, levels = unique(age_groups$age_group))) %>%
+  filter(disease == "Normal") 
+  #filter(sex == "male")
+head(runs_info, n = 3)
+
+runs_info$names <- runs_info$Run
+runs_info$files <- paste0(dir, "Data/rna_counts/", runs_info$names, "_quant/quant.sf")
+#file.exists(runs_info$files)
+```
+
+```{r age_distribution}
+runs_info %<>% mutate(Age = as.numeric(Age))
+
+ggplot(runs_info, aes(x = age_group)) +
+  geom_bar() +
+  theme_bw() + 
+  ylab('number of individuals') +
+  theme(text = element_text(size = 17))
+```
+
+
+```{r }
+# create summarized experiment with tximeta
+se <- tximeta(runs_info)
+
+# convert from ensembl transcript id to gene id
+gse <- summarizeToGene(se)
+gse <- gse[rowData(gse)$gene_biotype == "protein_coding", ]
+
+# filter for genes that have counts of at least 10 in at least 5 samples
+keep <- rowSums(assay(gse) >= 10) >= 5
+gse <- gse[keep,]
+
+#keep2 <- rowMax(assay(gse)) /rowMin(assay(gse)) > 5
+#gse <- gse[keep2,]
+
+assay(gse)[1:5, 1:5]
+dim(assay(gse))
+```
+
+
+# Differential expression analysis with DESeq2
+```{r}
+dds <- DESeqDataSet(gse, design = ~ age_group)
+
+# differential expression analysis
+dds <- DESeq(dds)
+
+foldchanges <- lapply(seq(1, length(unique(age_groups$age_group))-1, 1), function(ix) {
+    t0 = unique(age_groups$age_group)[ix]
+    t1 <- unique(age_groups$age_group)[ix+1]
+    # calculate log2 foldchange between two age intervals 
+    res <- results(dds, contrast=c("age_group", t0, t1))
+    res$gene <- rowData(dds)$symbol
+    res$transition <- paste0('fc_', t0, '_', t1)
+    res <- subset(res, select = c(gene, transition, log2FoldChange, padj)) %>%
+      as.data.frame() %>%
+      rownames_to_column(var = "ensembl_id") %>%
+      filter(gene != "")
+  return(res)}) %>%
+  bind_rows() %>%
+  mutate(abs_log2_fc = abs(log2FoldChange)) %>%
+  arrange(desc(abs_log2_fc)) %>%
+  drop_na(padj)
+
+head(foldchanges)
+```
+
+## Number of DE genes per transition
+```{r}
+group_by(foldchanges, transition) %>%
+  summarize("p<0.01" = length(which(padj < 0.01)),
+            "p<0.05" = length(which(padj < 0.05)),
+            "p<0.1" = length(which(padj < 0.1)),
+            "p<0.2" = length(which(padj < 0.2)))
+```
+
+
+## Robustness of selected DE genes
+```{r robustness}
+DE_subsampling <- read.delim(paste0(dir, "Data/subsampling_DE_0.1.csv"), sep = ",") %>%
+  group_by(transition, gene) %>%
+  summarise(n = n()) %>%
+  arrange(desc(n)) %>%
+  group_by(transition) %>% 
+  mutate(rank = rank(-n, ties.method = 'first'))
+
+# How often does each gene occur in the simulations?
+ggplot(DE_subsampling, aes(x = as.numeric(rank), y = n)) + 
+  geom_line() + 
+  facet_wrap(~transition, scales = "free_x") +
+  theme_bw() +
+  xlab("ranked genes") +
+  ylab("% subsamples with p < 0.1") +
+  theme(text = element_text(size = 20))
+
+filter(DE_subsampling, n > 25) %>% summarize(n = n())
+```
+
+
+## Save results
+```{r }
+# Filtering: such that around 200 robust & significant DE genes per transition 
+thresholds <- data.frame('transition' = c('fc_1-15_16-26', 'fc_16-26_27-60', 
+                                           'fc_27-60_61-85', 'fc_61-85_86-96'), 
+                          'p_threshold' = c(0.05, 0.1, 0.1, 1e-17), 
+                          'n_threshold' = c(50, 25, 20, 99), 
+                          'fc_threshold' = c(0.6, 0.4, 0.4, 1.6))
+
+foldchanges_filtered <- foldchanges %>% 
+  left_join(DE_subsampling, by = c('gene', 'transition')) %>%
+  left_join(thresholds) %>%
+  filter(padj < p_threshold & n > n_threshold & abs_log2_fc > fc_threshold)
+
+group_by(foldchanges_filtered, transition) %>% summarize(n = n())
+
+# Save the results for various thresholds on the adjusted p-value
+p_0.05 <- foldchanges_filtered %>%
+  group_by(gene, transition) %>%  
+  summarize(abs_log2_fc = mean(abs_log2_fc))
+
+write.csv(p_0.05, paste0(dir, "Data/DE_var_p_n_200.csv"), row.names = FALSE)
+```
+
+
+## Extract counts
+```{r}
+coldata <- as.data.frame(subset(colData(dds), select = c(names, Age, age_group, sex, source_name)))
+
+count_data <- counts(dds, normalized = TRUE) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "ensembl_id") %>%
+  mutate(gene = rowData(dds)$symbol) %>%
+  gather(key = "names", value = "counts", -c(ensembl_id, gene)) %>%
+  left_join(coldata, by = "names") %>%
+  filter(gene != "")
+write.csv(count_data, paste0(dir, "Data/count_data.csv"), row.names = FALSE)
+head(count_data)
+```
+
+
+```{r}
+# Mean counts per age group
+mean_counts <- count_data %>% group_by(ensembl_id, gene, age_group) %>%
+  summarize(counts = mean(counts)) %>%
+  ungroup()
+write.csv(mean_counts, paste0(dir, "Data/mean_counts.csv"), row.names = FALSE)
+head(mean_counts)
+```
+
+
+# Visualizations of DE genes
+## Distribution of p-values
+```{r hist_fc}
+ggplot(foldchanges, aes(x = padj)) +
+  geom_histogram() +
+  facet_wrap(~transition) +
+  xlab('adjusted p-value') +
+  theme_bw()
+```
+
+
+## Intersection of DE genes
+```{r upset, fig.height = 9, fig.width = 16}
+#split DE genes into list of groups according to the transitions
+transitions <- c("fc_1-15_16-26", "fc_16-26_27-60", "fc_27-60_61-85", 
+                 "fc_61-85_86-96")
+
+top_list <- p_0.05 %>% 
+  mutate(transition = factor(transition, levels = transitions)) %>%
+  group_by(transition) %>% 
+  group_split()
+names(top_list) <- transitions
+top_list <- lapply(top_list, function(list) list$gene)
+
+upset(fromList(top_list), order.by = "freq", nsets = 9,
+       mainbar.y.label = "Intersections", sets.x.label = "DE Genes",
+       text.scale = c(2.5, 2.5, 2, 2, 2.5, 2.5), nintersects = 20,
+       keep.order= TRUE)
+```
+
+
+## PCA of the samples
+```{r pca}
+# variance-stabilizing transformation
+vsd <- vst(dds)
+#vsd <- vsd[rownames(vsd) %in% lasso$ensembl_id,]
+# PCA
+plotPCA(vsd, intgroup = c("age_group")) +
+  theme_bw()
+```
+
+```{r pca_test}
+df_pca <- rownames_to_column(data.frame(t(assay(vsd)))) %>%
+  left_join(rownames_to_column(subset(data.frame(colData(vsd)), select = c('Age', 'sex', 'source_name', 
+                                                               'Ethnicity', 'age_group')))) 
+
+pca <- prcomp(df_pca[, 2:(ncol(df_pca)-5)])
+autoplot(pca, data = df_pca, colour = "age_group", x = 1, y = 2)  + 
+  theme_bw() +
+  theme(text = element_text(size = 20))
+```
+
+
+```{r}
+# Is another PC than 1 & 2 higher correlated to age?
+cor(df_pca[, 15339], pca$x[, 1])
+cor(df_pca[, 15339], pca$x[, 2])
+cor(df_pca[, 15339], pca$x[, 3])
+cor(df_pca[, 15339], pca$x[, 4])
+cor(df_pca[, 15339], pca$x[, 5])
+```
+
+
+```{r source_dist, eval = FALSE}
+ggplot(runs_info, aes(x = Age)) + 
+  geom_histogram() + 
+  facet_wrap(~source_name)
+```
+
+
+```{r}
+set.seed(142)
+umap_fit <- umap(df_pca[, 2:(ncol(df_pca)-5)])
+
+umap_df <- umap_fit$layout %>%
+  as.data.frame()%>%
+  dplyr::rename(UMAP1="V1", UMAP2="V2") %>%
+  mutate(sample=df_pca$rowname) %>%
+  inner_join(subset(data.frame(colData(vsd)), 
+                    select = c('Age', 'sex', 'source_name', 'Ethnicity', 'age_group')) %>%
+               rownames_to_column(var = "sample"))
+
+ggplot(umap_df, aes(x = UMAP1, y = UMAP2, color = age_group)) +
+  geom_point()
+```
+
+
+```{r}
+# save counts with variance-stabilizing transformation for MEFISTO
+count_data_vst <- assay(vsd) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "ensembl_id") %>%
+  mutate(gene = rowData(vsd)$symbol) %>%
+  gather(key = "names", value = "counts", -c(ensembl_id, gene)) %>%
+  left_join(coldata, by = "names") %>%
+  filter(gene != "")
+write.csv(count_data_vst, paste0(dir, "MOFA/Data/vst_counts.csv"), row.names = FALSE)
+write.csv(count_data_vst, paste0(dir, "Data/vst_counts.csv"), row.names = FALSE)
+```
+
+
+## Gene expression of following age intervals
+```{r}
+# Mean counts per age group
+mean_counts <- count_data_vst %>% group_by(ensembl_id, gene, age_group) %>%
+  summarize(counts = mean(counts)) %>%
+  ungroup()
+#write.csv(mean_counts, paste0(dir, "Data/mean_counts.csv"), row.names = FALSE)
+head(mean_counts)
+```
+
+
+
+```{r}
+expr_fc <- foldchanges %>% separate(transition, c("fc", "t0", "t1"), sep = "_", remove = FALSE) %>%
+  left_join(dplyr::rename(mean_counts, t0 = age_group, counts_t0 = counts)) %>%
+  left_join(dplyr::rename(mean_counts, t1 = age_group, counts_t1 = counts)) %>%
+  subset(select = c(ensembl_id, gene, transition, counts_t0, counts_t1, log2FoldChange, abs_log2_fc, padj)) %>%
+  left_join(mutate(p_0.05, selected = 'True')) %>%
+  mutate(selected = replace_na(selected, 'False')) %>%
+  arrange(selected)
+tail(expr_fc)
+```
+
+
+```{r counts_de, fig.height = 8, fig.width=10}
+group.colors <- c(False = "grey", True = "red")
+
+ggplot(expr_fc, aes(x = log2(counts_t0 + 0.1), y = log2(counts_t1 + 0.1), color = selected)) + 
+  geom_point(size = 0.4, alpha = 0.8) + 
+  facet_wrap(~transition) + 
+  theme_bw() + 
+  geom_smooth(method='lm', color = 'black', size = 0.5) +
+  theme(text = element_text(size = 15)) +
+  scale_color_manual(values=group.colors) +
+  xlab("log2 counts at t0") +
+  ylab("log2 counts at t1") +
+  theme(text = element_text(size = 20))
+```
+
+
+**Why are some of the selected genes so close to the black line?**
+```{r}
+expr_fc %>% 
+  mutate(diff = abs((counts_t0 - counts_t1)/(counts_t1+0.1))) %>% 
+  filter(selected == "True") %>% 
+  arrange(diff) %>% head()
+
+geneCounts <- plotCounts(dds, gene = "ENSG00000128606", intgroup = c("age_group"),
+                         returnData = TRUE, normalized = TRUE)
+ggplot(geneCounts, aes(x = age_group, y = count)) +
+  #geom_beeswarm(cex = 3) +
+  geom_violin(draw_quantiles = c(0.5), trim = TRUE) +
+  theme_bw()
+```
+
+
+## Volcano Plot
+```{r volcano_plot, fig.height=10, fig.width=12}
+EnhancedVolcano(expr_fc,
+  lab = expr_fc$gene,
+  x = 'log2FoldChange',
+  y = 'padj') +
+  facet_wrap(~transition, scales = "free")
+```
+
+
+# Hierarchical clustering to define the age groups
+## LASSO
+```{r}
+df = data.frame(t(assay(gse))) %>%
+  rownames_to_column(var = "sample") %>%
+  left_join(rownames_to_column(subset(data.frame(colData(gse)), select = c("Age")), var = 'sample'))
+
+model <- glmnet(subset(df, select = -c(sample, Age)), df$Age, alpha = 1, lambda = 1)
+lasso <- data.frame(ensembl_id = dimnames(coef(model))[[1]], coefficient = matrix(coef(model))) %>%
+  filter(coefficient != 0) %>%
+  filter(ensembl_id != "(Intercept)") %>%
+  arrange(desc(abs(coefficient)))
+head(lasso)
+```
+
+
+## Hierarchical clustering on LASSO features
+```{r hierarchical_clust}
+#lasso <- read.delim(paste0(dir, "MOFA/Data/lasso_coef.csv"), 
+ #                                    sep = ",", header = TRUE)
+# subset to features from LASSO regression
+#vsd <- vsd[rownames(vsd) %in% lasso$ensembl_id,]
+
+# use MEFISTO genes for clustering
+#mefisto_pos <- read.delim(paste0(dir, "MOFA/Data/top_genes_pos_0.1.csv"), 
+#                                     sep = ",", header = TRUE)
+#mefisto_neg <- read.delim(paste0(dir, "MOFA/Data/top_genes_neg_0.1.csv"), 
+#                                     sep = ",", header = TRUE)
+#MEFISTO_genes <- bind_rows(mefisto_pos, mefisto_neg)
+#
+#vsd <- vsd[rowData(vsd)$gene_name %in% MEFISTO_genes$gene,]
+
+sampleDists <- dist(t(assay(vsd[rownames(vsd) %in% lasso$ensembl_id,])))
+sampleDistMatrix <- as.matrix(sampleDists)
+
+annotation <- data.frame(subset(colData(vsd), select = c(age_group)))
+#annotation <- pred_age %>% dplyr::rename(Age = predicted_age) %>%
+#  left_join(age_groups) %>%
+#  column_to_rownames(var = "names") %>%
+#  subset(select = age_group)
+
+colors <- colorRampPalette(rev(brewer.pal(9, "Reds")))(255)
+
+pheatmap(sampleDistMatrix,
+         clustering_distance_rows = sampleDists,
+         clustering_distance_cols = sampleDists, annotation_col = annotation,
+         clustering_method = "ward.D2",
+         col = colors, show_colnames = F, show_rownames = F)
+```
+
+
+```{r}
+dend <- hclust(sampleDists, method = 'ward.D2')
+plot(dend, labels = FALSE)
+```
+
+
+```{r cluster_boxplot}
+annotation <- data.frame(subset(colData(vsd), select = c(Age)))
+#annotation <- pred_age %>% dplyr::rename(Age = predicted_age) %>%
+#  left_join(age_groups) %>%
+#  column_to_rownames(var = "names")
+
+clusters <- data.frame(cluster = cutree(dend, 6)) %>%
+  rownames_to_column() %>%
+  #left_join(data.frame(subset(annotation, select = Age)) %>% rownames_to_column()) %>%
+  left_join(annotation %>% rownames_to_column()) %>%
+  mutate(Age = as.numeric(Age)) %>%
+  mutate(cluster = factor(cluster, levels = seq(1, 6, 1)))
+
+ggplot(clusters, aes(x = cluster, y = Age, fill = cluster)) +
+  geom_boxplot() +
+  theme_bw() + 
+  geom_hline(yintercept = c(15.5, 36.5, 60.5, 85.5))
+```
+
+
+```{r cluster_ages}
+ggplot(clusters, aes(x = cluster, y = Age, color = cluster)) +
+  geom_point() +
+  theme_bw() + 
+  geom_hline(yintercept = c(15.5, 36.5, 60.5, 85.5))+
+  theme(text = element_text(size = 20))
+```
+
+
+
