@@ -42,6 +42,7 @@ def get_prizes_combi(tr0, tr1, data_dir, interactome, p_thr, cell_type):
         tr1: (string) transition from t+1 to t+2 e.g. "10_20"
         data_dir: (string) directory that contains the data files
         p_thr: (string) threshold for the p-values to prize DE genes
+        cell_type: (string) whether to use only tf-targets from fibroblasts or all cell_types
     
     Returns:
         df with the protein prizes
@@ -53,7 +54,7 @@ def get_prizes_combi(tr0, tr1, data_dir, interactome, p_thr, cell_type):
     de_genes_1['name'] = de_genes_1['name'] + "_tr1"
     
     # Filter DE genes of transition 1 to the ones targeted by the TFs
-    de_genes_1 = de_genes_1[de_genes_1['name'].isin(interactome['protein2'])]
+    #de_genes_1 = de_genes_1[de_genes_1['name'].isin(interactome['protein2'])]
     
     # Prize TFs based on their expression at time t+1
     tfs = pd.read_csv(data_dir+'tf_data/TF_prizes_' +cell_type +'.csv')
@@ -175,7 +176,7 @@ def run_pcst_combi(step, graph_params, data_dir, save_dir, cell_type, p_thr):
     interactome_file_name = data_dir + 'ppi_data/PPI_string_TFs.csv'    
     
     # Get prizes
-    prizes_data = get_prizes_combi(tr0, tr1, data_dir, interactome, p_thr, cell_type)
+    prizes_data = get_prizes_combi(tr0, tr1, data_dir, tf_targets, p_thr, cell_type)
     prizes_data.to_csv(save_dir+'de_terminals_'+step+'.tsv', header=True, index=None, sep='\t', quoting = csv.QUOTE_NONE, escapechar = '\t')
     prize_file_name = save_dir+'de_terminals_'+step+'.tsv' 
     
@@ -215,7 +216,7 @@ def save_net_html(net, incl_TFs, save_dir, name):
     return(nodes)
 
 
-def compare_networks(net_dict, data_dir, fig_dir, save_dir):
+def compare_networks(net_dict, data_dir, fig_dir, save_dir, TFs_with_targets):
     """ Gets statistics for a list of networks
     
     Args:
@@ -223,11 +224,12 @@ def compare_networks(net_dict, data_dir, fig_dir, save_dir):
         data_dir: (string) name of the data directory
         fig_dir: (string) name of the figure directory
         save_dir: (string) name of the save directory
+        TFs_with_targets: (boolean) if true only the TFs that target genes on the right are included
     
     Returns:
         Pandas DataFrame with the comparison results and dict of the target counts per TF
     """
-    results = pd.DataFrame(columns = ['n_nodes','n_edges', 'n_prized_nodes', 
+    results = pd.DataFrame(columns = ['n_nodes','n_edges', 'n_incl_terminals', 'percent_incl_terminals',
                                       'n_Steiner_nodes', 'n_TFs', 'n_incl_TFs', 
                                       'n_prized_TFs', 'n_significant_TFs', 'incl_TFs', 
                                       'significant_TFs', 'Steiner_nodes'])
@@ -261,18 +263,27 @@ def compare_networks(net_dict, data_dir, fig_dir, save_dir):
         # TF-target interactions
         tf_targets = get_TF_targets(data_dir, cell_type)
         
-        # Included TFs
-        STRING, tf_targets_subset = get_PPI(data_dir, tr1, cell_type, p_thr)
-        TFs = set(tf_targets_subset['protein1'])
-        incl_TFs = set(net.nodes()).intersection(TFs)
-        
         # Number of targets in the genome
+        STRING, tf_targets_subset = get_PPI(data_dir, tr1, cell_type, p_thr)
         proteins = [prot[:-4] for prot in set(STRING['protein1']).union(set(STRING['protein2']))]
         tf_targets = tf_targets[tf_targets['protein1'].isin(proteins)]
         tf_targets = tf_targets[tf_targets['protein2'].isin(proteins)]
         tf_targets['protein1'] = tf_targets['protein1'] + "_tr0"  
         tf_targets['protein2'] = tf_targets['protein2'] + "_tr1" 
         TF_counts = pd.DataFrame(tf_targets['protein1'].value_counts())
+        
+        # Percentage of included prized genes
+        prizes_data = get_prizes_combi(tr0, tr1, data_dir, tf_targets, p_thr, cell_type)
+        terminals = set(prizes_data['name'].tolist())
+        terminals = [node for node in terminals if node[:-4] in proteins]
+        percent_included_terminals = n_included_terminals/len(terminals) * 100
+        
+        # Included TFs
+        if TFs_with_targets == False:
+            TFs = set(tf_targets['protein1'])
+        else: 
+            TFs = set(tf_targets_subset['protein1'])
+        incl_TFs = set(net.nodes()).intersection(TFs)
         
         # Number of prized TFs
         network_df = oi.get_networkx_graph_as_dataframe_of_nodes(net)
@@ -282,8 +293,9 @@ def compare_networks(net_dict, data_dir, fig_dir, save_dir):
         # Number of targets that are in the network per TF
         incl_tf_targets = tf_targets[tf_targets['protein1'].isin(incl_TFs)]
         incl_tf_targets = incl_tf_targets[incl_tf_targets['protein2'].isin(net.nodes)]
-        target_counts = pd.DataFrame(incl_tf_targets['protein1'].value_counts()).join(TF_counts, lsuffix = "_incl_targets",
-                                                                                      rsuffix = "_genome_targets")
+        target_counts = pd.DataFrame(index = incl_TFs)
+        target_counts = target_counts.join(incl_tf_targets['protein1'].value_counts()).fillna(0)
+        target_counts = target_counts.join(TF_counts, lsuffix = "_incl_targets", rsuffix = "_genome_targets")
         target_counts['percent_genome_targets'] = target_counts['protein1_genome_targets'] / 18384
         
         # how many percent of the differentially expressed genes are targeted by each TF:
@@ -315,7 +327,7 @@ def compare_networks(net_dict, data_dir, fig_dir, save_dir):
         nodes = save_net_html(net, incl_TFs, save_dir, name)
         
         # Add results for the current network to the others
-        results.loc[name] = [n_nodes, n_edges, n_included_terminals, n_Steiner, 
+        results.loc[name] = [n_nodes, n_edges, n_included_terminals, percent_included_terminals, n_Steiner, 
                              len(TFs), len(incl_TFs), n_prized_TFs, len(significant_TFs), list(incl_TFs), 
                              significant_TFs, nodes.loc[nodes['category'] == 'Steiner node', 'name'].tolist()]
         target_counts_dict[name] = target_counts        
@@ -345,6 +357,43 @@ def get_net_dir_all_stages(save_dir, cell_type, p_thr):
         net_dir[p_thr+"-"+cell_type+ "-" + step] = augmented_forest
     
     return(net_dir)
+
+
+def create_subnet(cluster, corr_long, TF_clusters, data_dir, save_dir, thr):
+    """ Creates and saves a network for the correlation of selected TFs
+    
+    Args:
+        cluster: (int) number of the cluster
+        corr_long: (pandas DataFrame) correlation matrix of all TFs
+        TF_clusters: (pandas DataFrame) df with number of cluster for each TF
+        data_dir: (string) name of the data directory
+        save_dir: (string) name of the save directory
+        thr: (float) threshold for correlation
+    
+    Returns:
+        None
+    """
+    tf_targets = pd.read_csv(data_dir + 'tf_data/tf-target-information.txt', sep = '\t')
+    tf_targets = tf_targets[['TF', 'target']].drop_duplicates()
+    
+    selected_TFs = TF_clusters[TF_clusters['cluster'] == cluster]['TF'].tolist()
+    tf_targets_sub = tf_targets[tf_targets['TF'].isin(selected_TFs)]
+    corr_selected = corr_long[corr_long['protein1'].isin(selected_TFs)]
+    corr_selected = corr_selected[corr_selected['protein2'].isin(selected_TFs)]
+
+    corr_selected['shared_targets'] = corr_selected.apply(lambda row : len(set(tf_targets_sub.loc[tf_targets_sub['TF'] == row['protein1'], 'target']).intersection(set(tf_targets_sub.loc[tf_targets_sub['TF'] == row['protein2'], 'target']))), axis = 1)
+    corr_selected['targets_protein1'] = corr_selected.apply(lambda row : len(set(tf_targets_sub.loc[tf_targets_sub['TF'] == row['protein1'], 'target'])), axis = 1)
+    corr_selected['targets_protein2'] = corr_selected.apply(lambda row : len(set(tf_targets_sub.loc[tf_targets_sub['TF'] == row['protein2'], 'target'])), axis = 1)
+    corr_selected['percent_shared_targets'] = corr_selected['shared_targets']/corr_selected[['targets_protein1', 'targets_protein2']].min(axis=1)
+
+    corr_selected = corr_selected[(corr_selected['corr'] > thr)].sort_values(by = 'percent_shared_targets')
+    # Add additional row such that the coloring is not inverted
+    df = {'protein1': selected_TFs[0], 'protein2': selected_TFs[0], 'corr': 1, 'shared_targets': 0, 
+          'targets_protein1': 0, 'targets_protein2': 0, 'percent_shared_targets': 0}
+    corr_selected = corr_selected.append(df, ignore_index = True)
+    
+    network = nx.from_pandas_edgelist(corr_selected, 'protein1', 'protein2', ['corr', 'shared_targets', 'percent_shared_targets'])
+    oi.output_networkx_graph_as_interactive_html(network, filename=save_dir + 'TFs_cluster_'+str(cluster) + ".html")
 
 
 def main():

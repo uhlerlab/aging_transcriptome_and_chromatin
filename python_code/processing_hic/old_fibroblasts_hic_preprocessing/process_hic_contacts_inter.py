@@ -382,8 +382,10 @@ def z_score_hic_matrix(mean, std, chr_pairs, processed_hic_data_dir):
         df  = (df - mean)/std
         # save new matrix
         df.to_csv(processed_hic_data_dir+'hic_'+'chr'+str(chr1)+'_'+'chr'+str(chr2)+'_zscore.txt')
+        #with open(processed_hic_data_dir+'hic_'+'chr'+str(chr1)+'_'+'chr'+str(chr2)+'_zscore.pkl', 'wb') as f:
+         #   pickle.dump(df, f)
 
-
+            
 def output_blacklist_locations(chr_pairs, processed_hic_data_dir):
     '''
     Output a file with locations that have been removed (these locations will have an observed value of 0) 
@@ -526,11 +528,11 @@ def main():
         print('Log-transform HiC data')
         df_transformed = log_transform(df)
         
-#         # Filter out outliers
-#         print('Filter out outliers')
-#         df_transformed, ind_row, ind_col = filter_outliers(df_transformed)
-#         outliers_list = outliers_list+[f'chr_{chr1}_loc_{i*resol}' for i in ind_row]
-#         outliers_list = outliers_list+[f'chr_{chr2}_loc_{i*resol}' for i in ind_col]
+        # Filter out outliers
+        print('Filter out outliers')
+        df_transformed, ind_row, ind_col = filter_outliers(df_transformed)
+        outliers_list = outliers_list+[f'chr_{chr1}_loc_{i*resol}' for i in ind_row]
+        outliers_list = outliers_list+[f'chr_{chr2}_loc_{i*resol}' for i in ind_col]
 
         # Plot and save to pickle HiC data after filtering out centromeres, repeats and outliers
         plotname = 'hic_'+'chr'+str(chr1)+'_'+'chr'+str(chr2)+'_norm1_filter3'+'.eps'
@@ -544,12 +546,12 @@ def main():
         data_nonzero = data[np.nonzero(data)]
         nonzero_entries.append(data_nonzero)
 
-#    # Center and scale every Hi-C matrix by the mean and standard deviation across all matrices
-#    print('Z-score Hi-C matrices using nonzero mean and standard deviation')
-#    nonzero_entries = np.asarray(list(itertools.chain.from_iterable(nonzero_entries)))
-#    np.savetxt(final_hic_data_dir + 'whole_genome_nonzero.logtrans.txt', nonzero_entries)
-#    mean, std = whole_genome_mean_std(nonzero_entries)
-#    z_score_hic_matrix(mean, std, chr_pairs, final_hic_data_dir)
+    # Center and scale every Hi-C matrix by the mean and standard deviation across all matrices
+    print('Z-score Hi-C matrices using nonzero mean and standard deviation')
+    nonzero_entries = np.asarray(list(itertools.chain.from_iterable(nonzero_entries)))
+    np.savetxt(final_hic_data_dir + 'whole_genome_nonzero.logtrans.txt', nonzero_entries)
+    mean, std = whole_genome_mean_std(nonzero_entries)
+    z_score_hic_matrix(mean, std, chr_pairs, final_hic_data_dir)
     
     # Output pickle of outlier loci
     outliers_list = np.array(outliers_list)

@@ -7,6 +7,7 @@ import numpy as np
 import matplotlib as mpl
 mpl.use('Agg')
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 plt.ioff()
 import seaborn as sns
 import pandas as pd
@@ -113,9 +114,9 @@ def subset_MEFISTO(hic_df, MEFISTO_dir, percentage):
         A pandas dataframe with columns chr1, chr2, value, norm_value
     '''
     # get df with the top weighted genes from MEFISTO
-    pos_weights = pd.read_csv(MEFISTO_dir+'top_genes_pos_'+str(percentage)+'.csv')
+    pos_weights = pd.read_csv(MEFISTO_dir+'top_genes_pos_'+str(percentage)+'_50.csv')
     pos_weights['sign'] = 'positive'
-    neg_weights = pd.read_csv(MEFISTO_dir+'top_genes_neg_'+str(percentage)+'.csv')
+    neg_weights = pd.read_csv(MEFISTO_dir+'top_genes_neg_'+str(percentage)+'_50.csv')
     neg_weights['sign'] = 'negative'
     selected_genes = pd.concat([pos_weights, neg_weights])
 
@@ -185,12 +186,11 @@ def plot_clusters_sign(df, title, selected_genes):
     Plots clustered heatmap with color annotation according to sign of the MEFISTO weight
     Args:
         df: (pd DataFrame) normalized hic data
+        title: (string) title of the plot
+        selected_genes: (pd DataFrame) contains the signs of the selected genes
     Returns:
         Clustered heatmap
     '''
-    # if all zero column exists, remove column and row corresponding to that locus
-    df = df.loc[:, (df != 0).any(axis=0)]
-    df = df.T.loc[:, (df.T != 0).any(axis=0)].T
     
     # add color labels according to the sign of the gene in the first factor
     color_dict = {}
@@ -204,7 +204,7 @@ def plot_clusters_sign(df, title, selected_genes):
     
     # plot clustered heatmap
     plt.figure()
-    sns.clustermap(df,
+    p = sns.clustermap(df,
                    method='average',
                    metric='cosine',
                    row_cluster=True, col_cluster=True,
@@ -213,8 +213,91 @@ def plot_clusters_sign(df, title, selected_genes):
                    cmap='Reds', cbar_pos=(1, 0.5, 0.01, .4),
                    vmin=0, vmax=1,
                    dendrogram_ratio=(.1, .1),
-                   row_colors=[color_rows], col_colors=[color_rows]).fig.suptitle(title)
+                   row_colors=[color_rows], col_colors=[color_rows])
+    
+    order = p.dendrogram_row.reordered_ind
+    p.fig.suptitle(title)
+    
+    # add legend
+    handles = [Patch(facecolor=palette[name]) for name in [0, 1]]
+    plt.legend(handles, ['positive', 'negative'], title='Loading',
+               bbox_transform=plt.gcf().transFigure, bbox_to_anchor=(1., 0.3, 1., .102), loc='lower left')
+    
 
+def plot_clusters_pairs(df1, title1, df2, title2, selected_genes):
+    '''
+    Plots clustered heatmap with color annotation according to sign of the MEFISTO weight and second one in the same order
+    Args:
+        df1: (pd DataFrame) normalized hic data that should be clustered
+        title1: (string) title of the left subplot
+        df2: (pd DataFrame) normalized hic data that should be shown according to the clustering of df1
+        title2: (string) title of the right subplot
+        selected_genes: (pd DataFrame) contains the signs of the selected genes
+    Returns:
+        Clustered heatmaps for IMR90 and old fibroblasts in the same order
+    '''
+    
+    # add color labels according to the sign of the gene in the first factor
+    color_dict = {}
+    palette = sns.color_palette()
+    for loc in df1.columns:
+        if loc in selected_genes[selected_genes['sign'] == 'positive']['locus'].tolist():
+            color_dict[loc] = palette[0]
+        else:
+            color_dict[loc] = palette[1]
+    color_rows = pd.Series(color_dict)
+    
+    # plot clustered heatmap
+    plt.figure()
+    p = sns.clustermap(df1,
+                   method='average',
+                   metric='cosine',
+                   row_cluster=True, col_cluster=True,
+                   figsize=(6,5),
+                   xticklabels=False, yticklabels=False,
+                   cmap='Reds', cbar_pos=(1, 0.5, 0.01, .4),
+                   vmin=0, vmax=1,
+                   dendrogram_ratio=(.1, .1),
+                   row_colors=[color_rows], col_colors=[color_rows])
+    
+    order = p.dendrogram_row.reordered_ind
+    p.fig.suptitle(title1)
+    
+    # add legend
+    handles = [Patch(facecolor=palette[name]) for name in [0, 1]]
+    plt.legend(handles, ['positive', 'negative'], title='Loading',
+               bbox_transform=plt.gcf().transFigure, bbox_to_anchor=(1., 0.3, 1., .102), loc='lower left')
+        
+    # change ordering of df2 to the clustering of df1
+    df2 = df2.iloc[order, order]
+    
+    # add color labels according to the sign of the gene in the first factor for df2
+    color_dict = {}
+    palette = sns.color_palette()
+    for loc in df2.columns:
+        if loc in selected_genes[selected_genes['sign'] == 'positive']['locus'].tolist():
+            color_dict[loc] = palette[0]
+        else:
+            color_dict[loc] = palette[1]
+    color_rows = pd.Series(color_dict)
+    
+    # plot 2
+    p2 = sns.clustermap(df2,
+                   method='average',
+                   metric='cosine',
+                   row_cluster=False, col_cluster=False,
+                   figsize=(6,5),
+                   xticklabels=False, yticklabels=False,
+                   cmap='Reds', cbar_pos=(1, 0.5, 0.01, .4),
+                   vmin=0, vmax=1,
+                   dendrogram_ratio=(.1, .1),
+                   row_colors=[color_rows], col_colors=[color_rows])
+    p2.fig.suptitle(title2)
+    # add legend
+    handles = [Patch(facecolor=palette[name]) for name in [0, 1]]
+    plt.legend(handles, ['positive', 'negative'], title='Loading',
+               bbox_transform=plt.gcf().transFigure, bbox_to_anchor=(1., 0.3, 1., .102), loc='lower left')
+    
     
 def plot_hist(df1, df2, binwidth, celltype):
     '''
@@ -335,7 +418,7 @@ def main():
     hic_wide = long_to_wide(hic_subset)    
     
     # Save results
-    hic_wide.to_csv(hic_dir + 'processed_hic_data_' + cell_type + '/final_BP250000_intraKR_interINTERKR/MEFISTO.csv')
+    hic_wide.to_csv(hic_dir + 'processed_hic_data_' + cell_type + '/final_BP250000_intraKR_interINTERKR/MEFISTO_50.csv')
     
 
 if __name__ == "__main__":
