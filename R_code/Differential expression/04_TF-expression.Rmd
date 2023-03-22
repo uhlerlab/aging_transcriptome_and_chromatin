@@ -14,6 +14,10 @@ dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
 figdir = paste0(dir, "Figures/TF_expr/")
 if(!dir.exists(figdir)) dir.create(figdir)
 knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+
+library(showtext)
+font_add("Arial", "/Library/Fonts/Arial.ttf")
+showtext_auto()
 ```
 
 ```{r load_libraries, message = FALSE, warning = FALSE}
@@ -22,10 +26,20 @@ library(magrittr)
 library(ggbeeswarm)
 ```
 
-# Load count data
+# Load data
+## Variance-stabilized transformed expression values for all genes in all individuals
 ```{r}
-counts <- read.delim(paste0(dir, "Data/count_data.csv"), sep = ",")
-mean_counts <- read.delim(paste0(dir, "Data/mean_counts.csv"), sep = ",")
+#counts <- read.delim(paste0(dir, "Data/count_data.csv"), sep = ",")
+counts <- read.delim(paste0(dir, "Data/vst_counts.csv"), sep = ",")
+#mean_counts <- read.delim(paste0(dir, "Data/mean_counts.csv"), sep = ",")
+head(counts)
+```
+
+## TF groups from the Steiner trees
+```{r}
+pcst_groups <- read.delim(paste0(dir, "Data/specific_TFs_targets.csv"), sep = ",")  %>%
+  mutate(net = factor(net, levels = c('young_net', 'middle_net', 'old_net', 'shared')))
+head(pcst_groups)
 ```
 
 
@@ -45,7 +59,7 @@ plot_TF_expression <- function(TFs){
     theme(text = element_text(size = 13),
           strip.text.x = element_text(size = 16)) +
     xlab("Age") + 
-    ylab("Normalized RNAseq counts") +
+    ylab("FPKM") +
     geom_smooth(color = "red")
 }
 
@@ -62,63 +76,64 @@ plot_TF_mean_expression <- function(TFs){
     facet_wrap(~gene, scales = "free_y") +
     theme(legend.position="none") + 
     theme(text = element_text(size = 13),
-          strip.text.x = element_text(size = 16),
+          strip.text.x = element_text(size = 15),
           axis.text.x = element_text(angle = 90)) +
     xlab("Age") + 
-    ylab("Normalized RNAseq counts") +
-    geom_line(stat = "summary", fun = "median", colour = "brown", size = 1, aes(group = 1))
+    ylab("Normalized expression") +
+    geom_line(stat = "summary", fun = "mean", colour = "brown", size = 1, aes(group = 1))
+}
+
+TF_variability <- function(TFs){
+  TF_expr <- filter(counts, gene %in% TFs) %>%
+    # if two ensembl ids correspond to the same TF take the mean count
+    group_by(gene, names, Age, age_group) %>%
+    summarize(counts = mean(counts)) %>%
+    ungroup() %>%
+    # get median expression per age group
+    group_by(gene, age_group) %>%
+    summarize(median = median(counts)) %>%
+    ungroup() %>%
+    # calculate variance per TF
+    group_by(gene) %>%
+    summarize(variance = var(median)) %>%
+    # order TFs from highest to lowest variance
+    arrange(desc(variance))
+  return(TF_expr)
 }
 ```
 
 
 ## Shared TFs
 ```{r shared_TFs, fig.height=4}
-TFs <- c('AHR','FOXO3','GATA4','GTF2B','HIF1A','MAFF','MAZ','NOTCH1','NR2C2',
- 'SRC','STAT1','STAT3','TCF7L2','TEAD4')
-plot_TF_expression(TFs) +facet_wrap(~gene, scales = "free_y", nrow = 3)
+TFs <- unique(filter(pcst_groups, net == "shared")$TF)
+plot_TF_mean_expression(TFs) +facet_wrap(~gene, scales = "free_y", nrow = 3)
+TF_variability(TFs)
 ```
 
 ## Old-specific TFs
 ```{r old_TFs, fig.height=4}
-TFs <- c('ASCL2','CDK9','CEBPA','CTCF','E2F1','EHF','GRHL3','KDM1A','KLF1',
-         'NCOR1','POLR2A', 'SIX5')
+TFs <- unique(filter(pcst_groups, net == "old_net")$TF)
 
-plot_TF_expression(TFs)
+plot_TF_mean_expression(TFs) +facet_wrap(~gene, scales = "free_y", nrow = 3)
+TF_variability(TFs)
 ```
 
 ## Young-specific TFs
 ```{r young_TFs, fig.height=4}
-TFs <- c('ASCL1', 'CREBBP', 'ERG', 'FOXA1', 'RELA', 'SMAD3', 'SPIB', 'TP73', 'ZNF263')
-plot_TF_expression(TFs)+facet_wrap(~gene, scales = "free_y", nrow = 2)
+TFs <- unique(filter(pcst_groups, net == "young_net")$TF)
+plot_TF_mean_expression(TFs)+facet_wrap(~gene, scales = "free_y", nrow = 3)
+TF_variability(TFs)
 ```
 
 
-## First network specific TFs
-```{r first_TFs}
-TFs <- c('CDK7','CTNNB1','EP300','FOXA2','GLI2','GLYR1','HOXA13','MEIS1',
- 'MYBL2','NR5A2','PGR','PML','RNF2','STAT5A','TFAP2C')
-plot_TF_expression(TFs)
+## Middle network specific TFs
+```{r middle_TFs, , fig.height=5}
+TFs <-  unique(filter(pcst_groups, net == "middle_net")$TF)
+plot_TF_mean_expression(TFs) +facet_wrap(~gene, scales = "free_y", ncol = 7)
 ```
 
 
-## Second network specific TFs
-```{r second_TFs}
-TFs <- c('AR','CHD4','ELK3','ESR1','FOXP2','NFYC','OTX2','RXRA','STAT5B','WDR5',
- 'ZBTB33','ZEB1','ZFX','ZNF76','ZNF83')
-plot_TF_expression(TFs)
-```
-
-
-## Last network specific TFs
-```{r last_net}
-TFs <- c('ARNT','ATRX','BMI1','CLOCK','DDX5','FOS','MBD3','MYH11','NFIC',
- 'PBX1','RBBP5','SMAD2','SMARCA4','TAF3')
-
-plot_TF_expression(TFs)
-```
-
-
-# Differentially expressed TFs
+## Differentially expressed TFs
 ```{r}
 TF_targets <- read.delim(paste0(dir, "Data/tf-target-information.txt"))
 p_0.05 <- read.delim(paste0(dir, "Data/DE_var_p_n_200.csv"), sep = ",")
@@ -129,12 +144,44 @@ head(DE_TFs)
 dim(DE_TFs)
 ```
 
-```{r DE_TFs}
-plot_TF_expression(unique(DE_TFs$gene))
-```
 
 ```{r DE_TFs_mean}
 plot_TF_mean_expression(unique(DE_TFs$gene))
 ```
 
+## MAZ, FLI1, ZNF384
+```{r maz_fli1_znf384, fig.height=4}
+TFs <-  c("MAZ", "FLI1", "ZNF384")
+plot_TF_mean_expression(TFs) + facet_wrap(~gene, scales = "free_y", ncol = 3)
+```
+
+
+# Expression trajectories for DE genes
+## Age group 1 vs 2
+```{r g1-2, fig.height = 2.5}
+genes <-  c("PRXL2B", "MOAP1", "MYO19", "GMPR2", "TRIM39")
+plot_TF_mean_expression(genes) + 
+  facet_wrap(~gene, scales = "free_y", nrow = 1)
+```
+
+## Age group 2 vs 3
+```{r g2-3, fig.height = 2.5}
+genes <-  c("SKA1", "FLOT1", "PRXL2B", "RRN3", "MOAP1")
+plot_TF_mean_expression(genes) + 
+  facet_wrap(~gene, scales = "free_y", nrow = 1)
+```
+
+## Age group 3 vs 4
+```{r g3-4, fig.height = 2.5}
+genes <-  c("MYO19", "RING1", "PRXL2B", "FOXS1", "LEP")
+plot_TF_mean_expression(genes) + 
+  facet_wrap(~gene, scales = "free_y", nrow = 1)
+```
+
+## Age group 4 vs 5 
+```{r g4-5, fig.height = 2.5}
+genes <-  c("MYO19", "FLOT1", "RING1", "TNXB", "PRXL2B")
+plot_TF_mean_expression(genes) + 
+  facet_wrap(~gene, scales = "free_y", nrow = 1)
+```
 

@@ -204,9 +204,31 @@ mean_counts <- read.delim(paste0(dir, "Data/mean_counts.csv"), sep = ",") %>%
 TF_targets %<>% mutate(expressed = ifelse(target %in% mean_counts$gene, 'True', 'False'))
 
 # Add corresponding loci for targets
-gene_loci <- read.delim(paste0(dir, "Data/all_gene_loci.csv"), sep = ",") %>%
-  dplyr::rename('target' = 'gene')
-TF_targets %<>% left_join(gene_loci)
+# Query gene information from biomart
+targets <- unique(TF_targets$target)
+mart <- useEnsembl(biomart = "ensembl", 
+                   dataset = "hsapiens_gene_ensembl", 
+                   mirror = "useast")
+gene_annotations <- getBM(filters="external_gene_name", 
+                          attributes=c("external_gene_name", 
+                                       "chromosome_name", "start_position", 
+                                       "end_position", "description"), 
+                          values=c(targets), mart=mart) %>%
+  data.frame() %>%
+  arrange(chromosome_name) %>%
+  group_by(external_gene_name) %>%
+  summarize(chr = dplyr::first(chromosome_name), start = dplyr::first(start_position), 
+            end = dplyr::first(end_position), description = dplyr::first(description)) %>%
+  dplyr::rename(gene = external_gene_name)
+# Add loci to gene dataframe
+data_loci <- gene_annotations %>%
+  mutate(locus = paste0("chr_", chr, "_loc_", 
+                        plyr::round_any(start, 250000, floor))) %>%
+  filter(chr %in% as.character(seq(1,22,1))) %>%
+  arrange(as.numeric(chr), start) %>%
+  subset(select = c(gene, locus)) %>%
+  dplyr::rename(target = gene)
+TF_targets %<>% left_join(data_loci)
 
 # Add loci activity
 IMR90 <- read.csv(paste0(file_path, "Data/IMR90_cosine_wo_PC.txt")) %>%
@@ -221,7 +243,7 @@ TF_targets %<>%
   left_join(old_fibroblasts) %>% 
   replace_na(list(old_activity = "old:inactive")) %>%
   mutate(development = factor(paste0(young_activity, "_", old_activity), 
-        levels = c("young:active_old:active", "young:active_old:inactive", "young:inactive_old:active", "young:inactive_old:inactive")))
+        levels = c("young:active_old:active", "young:active_old:inactive", "young:inactive_old:active", "young:inactive_old:inactive"))) %>% drop_na()
 
 # Save results
 write.csv(TF_targets, paste0(dir, "Data/tf_targets_anno.csv"), row.names = FALSE)

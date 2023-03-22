@@ -14,6 +14,10 @@ file_path <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
 figdir = paste0(file_path, "Figures/DE_genes/")
 if(!dir.exists(figdir)) dir.create(figdir)
 knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+
+library(showtext)
+font_add("Arial", "/Library/Fonts/Arial.ttf")
+showtext_auto()
 ```
 
 ```{r load_libraries, message = FALSE, warning = FALSE}
@@ -109,6 +113,19 @@ data_long <- subset(data_ens, select = -c(chr, start, end, strand, Length, Copie
   mutate(value = value / sum(value) * 10**6)
 head(data_long, n = 3)
 ```
+
+```{r sample_overview, fig.height = 5, fig.width = 7}
+samples <- group_by(data_long, id) %>%
+  dplyr::summarize(age = first(age), sex = first(sex))
+
+ggplot(samples, aes(x = age, fill = sex)) + 
+  geom_bar() +
+  theme_bw() + 
+  xlab('Age') + 
+  ylab('Number of individuals') +
+  theme(text = element_text(size = 20))
+```
+
 
 ```{r}
 #round age down to 10 year intervals

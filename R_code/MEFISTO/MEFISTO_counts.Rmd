@@ -485,7 +485,7 @@ ggplot(MEFISTO_scores, aes(x = age_group, y = score1, fill = age_group)) + geom_
 # Rank TFs based on MEFISTO loadings
 ```{r}
 # Load TF-target interactions
-TF_targets <- read.delim(paste0(dir, "Data/tf-target-information.txt")) %>%
+TF_targets <- read.delim(paste0(file_path, "Data/tf-target-information.txt")) %>%
   subset(select = c("TF", "target")) %>%
   distinct() %>%
   filter(target %in% filtered_data$gene)
@@ -516,7 +516,7 @@ head(mean_loadings)
 
 ```{r}
 # add info about which TFs occurred in which of the three Steiner trees
-pcst_TFs = read.delim(paste0(dir, 'Data/pcst/incl_TFs_design2.csv'), sep = ",") %>%
+pcst_TFs = read.delim(paste0(file_path, 'Data/incl_TFs_design2.csv'), sep = ",") %>%
   mutate(included = "True") %>%
   mutate(net = factor(net, levels = c('young_net', 'middle_net', 'old_net'))) %>% #keeps ordering
   spread(key = net, value = included, fill = "False") %>%
@@ -527,28 +527,33 @@ pcst_TFs %<>% mutate(TF = factor(TF, levels = unique(pcst_TFs$TF)))
 head(pcst_TFs)
 ```
 
-```{r}
+```{r TF_target_loadings}
 ggplot(pcst_TFs, aes(x = TF)) +
   geom_point(aes(x = TF, y = value)) +
   geom_vline(xintercept = pcst_TFs[pcst_TFs$old_net == 'True', 'TF'], color = "red")
 
-ggplot(pcst_TFs, aes(x = TF)) +
-  geom_point(aes(x = TF, y = value)) +
-  geom_vline(xintercept = TFs, color = "red")
+#ggplot(pcst_TFs, aes(x = TF)) +
+#  geom_point(aes(x = TF, y = value)) +
+#  geom_vline(xintercept = TFs, color = "red")
 ```
 
-```{r}
+```{r shared_TFs_MEFISTO-loadings}
 # Select TFs that occur in all 3 Steiner trees in design 2
 TFs = c('AHR','ATF1','BACH2','FLI1','FOXO3','GATA4','GTF2B','HIF1A','KAT5',
         'LYL1','MAFF','MAZ','NOTCH1','NR2C2','SRC','STAT1','STAT3','TCF7L2','TEAD4')
 
-filter(pcst_TFs, TF %in% TFs) %>%
-  slice_max(n = 10, order_by = value) %>%
+shared_TFs_loadings <- filter(pcst_TFs, TF %in% TFs) %>%
+  arrange(desc(value)) %>%
   subset(select = c(TF, value))
+
+head(shared_TFs_loadings)
+
+ggplot(shared_TFs_loadings, aes(x = TF, y = value)) +
+  geom_point() +
+  theme_bw() + 
+  theme(axis.text.x = element_text(angle = 90)) +  
+  theme(text = element_text(size = 17)) + 
+  ylab('median target loading')
 ```
 
-
-STAT3: https://genomics.senescence.info/genes/entry.php?hgnc=STAT3
-BACH2: marker of DNA damage and ageing (https://pubmed.ncbi.nlm.nih.gov/24075570/)
-NOTCH: https://pubmed.ncbi.nlm.nih.gov/27328278/
 

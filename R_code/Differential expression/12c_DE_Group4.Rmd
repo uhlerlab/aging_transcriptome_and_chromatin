@@ -1,0 +1,136 @@
+---
+title: "12c_DE_Group4"
+author: "Jana"
+date: "2023-02-22"
+output: BiocStyle::html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
+figdir = paste0(dir, "Figures/RNAseq_processing/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+
+library(showtext)
+font_add("Arial", "/Library/Fonts/Arial.ttf")
+showtext_auto()
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr)
+library(tximeta)
+library(DESeq2)
+library(UpSetR)
+```
+
+# Obtaining count data
+## Reading in data with tximeta
+```{r}
+# define age groups
+age_groups <- data.frame(Age = as.character(seq(1, 85, 1)), 
+                         age_group = c(rep('1-15', 15), rep('16-26', 11), 
+                                      rep('27-60', 34), rep('61-85', 25)), 
+                         group4 = c(rep('rest', 60), rep('Group4', 25)))
+```
+
+
+```{r}
+# get info about the runs
+runs_info <- read.delim(paste0(dir, "Data/SraRunTable.txt"), sep = ",") %>%
+  mutate(Age = gsub("y[rs]\\d+mos", "", Age)) %>%
+  mutate(Age = gsub("yr", "", Age)) %>%
+  filter(Age < 86) %>%
+  left_join(age_groups) %>%
+  mutate(age_group = factor(age_group, levels = unique(age_groups$age_group))) %>%
+  filter(disease == "Normal") %>% 
+  mutate(Age = as.numeric(Age))
+head(runs_info, n = 3)
+
+runs_info$names <- runs_info$Run
+runs_info$files <- paste0(dir, "Data/rna_counts/", runs_info$names, "_quant/quant.sf")
+```
+
+```{r }
+# create summarized experiment with tximeta
+se <- tximeta(runs_info)
+
+# convert from ensembl transcript id to gene id
+gse <- summarizeToGene(se)
+gse <- gse[rowData(gse)$gene_biotype == "protein_coding", ]
+dim(assay(gse))
+
+# filter for genes that have counts of at least 10 in at least 5 samples
+keep <- rowSums(assay(gse) >= 10) >= 5
+gse <- gse[keep,]
+
+assay(gse)[1:5, 1:5]
+dim(assay(gse))
+```
+
+
+# Differential expression analysis with DESeq2
+## Group1-specific genes
+```{r}
+dds <- DESeqDataSet(gse, design = ~ group4)
+
+# differential expression analysis
+dds <- DESeq(dds)
+
+# calculate log2 foldchange between age group 4 individuals and all others
+DE4 <- results(dds, contrast=c("group4", "Group4", "rest"))
+DE4$gene <- rowData(dds)$symbol
+DE4<- subset(DE4, select = c(gene, log2FoldChange, pvalue, padj)) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "ensembl_id") %>%
+  filter(gene != "") %>%
+  drop_na(padj) %>%
+  group_by(gene) %>% # mean over transcripts belonging to the same gene
+  summarize(log2FoldChange = max(log2FoldChange), padj = min(padj)) %>%
+  mutate(abs_log2_fc = abs(log2FoldChange)) %>%
+  arrange(padj) %>%
+  mutate(updown = ifelse(log2FoldChange > 0, 'up', 'down'))
+
+DE4_200 <- slice_min(DE4, padj, n = 170)
+write.csv(DE4_200, paste0(dir, "Data/DE_Group4.csv"), row.names = FALSE)
+head(DE4_200)
+```
+
+```{r}
+# Select top 200 up- and downregulated genes
+DE4_down <- DE4 %>% filter(log2FoldChange < 0) %>% slice_min(padj, n = 170)
+DE4_up <- DE4 %>% filter(log2FoldChange > 0) %>% slice_min(padj, n = 170)
+write.csv(DE4_down, paste0(dir, "Data/DE_Group4_down.csv"), row.names = FALSE)
+write.csv(DE4_up, paste0(dir, "Data/DE_Group4_up.csv"), row.names = FALSE)
+```
+
+
+# Intersection with DE genes of consecutive age groups
+```{r upset_DE_genes4, fig.height = 9, fig.width = 20}
+groups <- data.frame('transition'= c('fc_1-15_16-26', 'fc_16-26_27-60', 
+                                     'fc_27-60_61-85', 'fc_61-85_86-96'),
+                     'group' = c('Group 1 vs. Group 2', 'Group 2 vs. Group 3', 
+                                 'Group 3 vs. Group 4', 'Group 4 vs. Group 5'))
+all_groups <- c('Group 1 vs. Group 2', 'Group 2 vs. Group 3', 'Group 3 vs. Group 4', 
+                'Group 4 vs. Group 5', 'Group 4 vs. all others')
+all_DE <- read.delim(paste0(dir, "Data/DE_var_p_n_200.csv"), sep = ",") %>%
+  left_join(groups) %>%
+  subset(select = c(gene, group)) %>%
+  bind_rows(data.frame('gene' = DE4_200$gene, 'group' = 'Group 4 vs. all others'))  %>%
+  mutate(group = factor(group, levels = all_groups)) %>%
+  group_by(group) %>% 
+  group_split()
+names(all_DE) <- all_groups
+all_DE <- lapply(all_DE, function(list) list$gene)
+
+upset(fromList(all_DE), order.by = "freq", 
+       mainbar.y.label = "Intersections", sets.x.label = "DE Genes",
+       text.scale = c(3.5, 3.5, 3, 3, 3.5, 3.5), nintersects = 20,
+       keep.order= TRUE, sets = c("Group 4 vs. all others", "Group 4 vs. Group 5", "Group 3 vs. Group 4", 
+                                  "Group 2 vs. Group 3", "Group 1 vs. Group 2"))
+
+```
+

@@ -1,0 +1,171 @@
+---
+title: "08_new_data"
+author: "Jana Braunger"
+date: '2022-10-05'
+output: BiocStyle::html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
+figdir = paste0(dir, "Figures/BACH2/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+
+set.seed(202210)
+library(showtext)
+font_add("Arial", "/Library/Fonts/Arial.ttf")
+showtext_auto()
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr)
+library(pheatmap)
+```
+
+# Load data
+## Difference map 
+The difference map was calculated as "young + 2 * old" with young and old being the
+binarized maps using the LAS algorithm. So, 0 means there is no interaction between
+the loci in both celltypes, 1 only an interaction (as part of a LAS) in young fibroblasts,
+2 only in old fibroblasts and 3 an interaction in both cells.
+
+```{r}
+diff_map <- read.delim(paste0(dir, "Data/difference_maps/diff_all_gene_loci.csv"), sep = ",") %>%
+  gather(key = 'chr2', value = 'intermingling', -chr1)
+all_loci <- unique(c(diff_map$chr1, diff_map$chr2))
+diff_map %<>% filter(intermingling != 0) %>%
+  mutate(intermingling = recode(intermingling, '1' = 'Young', '2' = 'Old', '3' = 'Shared')) %>%
+  mutate(intermingling = factor(intermingling, levels = c('Young', 'Old', 'Shared')))
+head(diff_map)
+```
+
+## TF-target interactions
+```{r}
+TF_targets <- read.delim(paste0(dir, "Data/tf_targets_anno.csv"), sep = ",") %>%
+  subset(select = c(TF, target, locus))
+head(TF_targets)
+```
+
+
+## TFs per PCST group
+```{r}
+pcst_groups <- read.delim(paste0(dir, "Data/specific_TFs_targets.csv"), sep = ",") 
+# add loci of TFs and target genes
+gene_loci <- read.delim(paste0(dir, "Data/all_gene_loci.csv"), sep = ",") 
+pcst_groups %<>% left_join(dplyr::rename(gene_loci, target = gene, target_locus = locus)) %>%
+  left_join(dplyr::rename(gene_loci, TF = gene, TF_locus = locus)) %>%
+  drop_na() %>%
+  mutate(net = factor(net, levels = c('young_net', 'middle_net', 'old_net', 'shared')))
+head(pcst_groups)
+```
+
+
+# Cell-state specific intermingling in PCST groups
+## TF loci
+```{r TF_intermingling}
+#normalization: divide by number of TFs per group
+intermingling_TFs <- subset(pcst_groups, select = c(net, TF_locus)) %>%
+  distinct() %>%
+  dplyr::rename(chr1 = TF_locus) %>%
+  inner_join(diff_map) %>%
+  # filter chr2 has to be TF locus too?
+  group_by(net, intermingling) %>%
+  summarize(n = n()) 
+head(intermingling_TFs)
+
+ggplot(intermingling_TFs, aes(x = net, y = n, fill = net)) +
+  geom_bar(stat = 'identity') +
+  facet_wrap(~intermingling, scale = "free_y") +
+  theme_bw()
+```
+
+## All target loci
+```{r targets_intermingling}
+# number of targets per TF as a normalization
+target_loci <- subset(pcst_groups, select = c(TF, target_locus)) %>% 
+  distinct() %>% 
+  group_by(TF) %>% 
+  summarize(n_target_loci = n())
+
+# get amount of cell state specific intermingling between targets of each TF
+intermingling_TFs <- subset(pcst_groups, select = c(net, TF, target_locus)) %>%
+  dplyr::rename(chr1 = target_locus) %>%
+  inner_join(diff_map) %>%
+  inner_join(dplyr::rename(subset(pcst_groups, select = c(net, TF, target_locus)), chr2 = target_locus)) %>%
+  distinct() %>%
+  group_by(net, TF, intermingling) %>%
+  summarize(n_intermingling = n()) %>%
+  left_join(target_loci) %>%
+  mutate(percent_intermingling = n_intermingling / (n_target_loci * n_target_loci))
+head(intermingling_TFs)
+
+ggplot(intermingling_TFs, aes(x = net, y = percent_intermingling, fill = net)) +
+  geom_boxplot() +
+  facet_wrap(~intermingling, scale = "free_y") +
+  theme_bw()
+```
+
+## DE target loci
+```{r DE_targets_intermingling, fig.width = 11}
+# number of targets per TF as a normalization
+target_loci <- filter(pcst_groups, DE_gene == 'True') %>%
+  subset(select = c(TF, target_locus)) %>% 
+  distinct() %>% 
+  group_by(TF) %>% 
+  summarize(n_target_loci = n())
+
+# get amount of cell state specific intermingling between targets of each TF
+intermingling_TFs <- filter(pcst_groups, DE_gene == 'True') %>%
+  subset(select = c(net, TF, target_locus)) %>%
+  dplyr::rename(chr1 = target_locus) %>%
+  inner_join(diff_map) %>%
+  inner_join(dplyr::rename(subset(filter(pcst_groups, DE_gene == 'True'), 
+                                  select = c(net, TF, target_locus)), chr2 = target_locus)) %>%
+  distinct() %>%
+  group_by(net, TF, intermingling) %>%
+  summarize(n_intermingling = n()) %>%
+  left_join(target_loci) %>%
+  mutate(percent_intermingling = n_intermingling / (n_target_loci * n_target_loci))
+head(intermingling_TFs)
+
+ggplot(intermingling_TFs, aes(x = net, y = percent_intermingling, fill = net)) +
+  geom_boxplot() +
+  facet_wrap(~intermingling, scale = "free_y") +
+  theme_bw()
+```
+
+
+# Intermingling of targets of selected TFs
+```{r}
+selected_TFs <- c("BACH2", "HIF1A", "MRE11A")
+counts <- data.frame()
+set.seed(202210)
+for (selected_TF in selected_TFs){
+  TF_target_loci <- unique(filter(TF_targets, TF == selected_TF)$locus)
+  TF_counts <- filter(diff_map, chr1 %in% TF_target_loci, chr2 %in% TF_target_loci) %>%
+    group_by(intermingling) %>%
+    summarize(percent = n() / (length(TF_target_loci)*length(TF_target_loci))) %>%
+    mutate(TF = selected_TF)
+  counts <- bind_rows(counts, TF_counts)
+}
+
+random_loci <- sample(all_loci, length(TF_target_loci))
+random_counts <- filter(diff_map, chr1 %in% random_loci, chr2 %in% random_loci) %>%
+  group_by(intermingling) %>%
+  summarize(percent = n() / (length(random_loci) * length(random_loci))) %>%
+  mutate(TF = "random")
+counts <- bind_rows(counts, random_counts)
+
+ggplot(counts, aes(x = TF, y = percent, fill = TF)) +
+  geom_bar(stat = 'identity') +
+  facet_wrap(~intermingling, scale = "free_y") +
+  theme_bw()
+```
+
+
+

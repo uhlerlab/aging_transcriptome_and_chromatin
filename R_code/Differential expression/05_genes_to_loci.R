@@ -1,5 +1,5 @@
 # Get loci for the targets of a TF
-selected_TF = "BACH2"
+selected_TF = "HIF1A"
 
 # Libraries
 library(tidyverse)
@@ -25,7 +25,7 @@ gene_annotations <- getBM(filters="external_gene_name",
                           attributes=c("external_gene_name", 
                                        "chromosome_name", "start_position", 
                                        "end_position", "description"), 
-                          values=unique(data$gene), mart=mart) %>%
+                          values=c(unique(data$gene), selected_TF), mart=mart) %>%
   data.frame() %>%
   arrange(chromosome_name) %>%
   group_by(external_gene_name) %>%

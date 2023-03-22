@@ -43,7 +43,8 @@ louvain_clusters <- read.delim(paste0(dir, "Data/difference_maps/louvain_cluster
   mutate(cluster = paste0("cluster_", cluster))
 
 hierarchical_clusters <- read.delim(paste0(dir, "Data/difference_maps/hierarchical_clusters_BACH2.csv"), sep = ",") %>%
-  mutate(cluster = paste0("cluster_", cluster))
+  mutate(cluster = paste0("cluster_", cluster)) %>%
+  mutate(cluster = factor(cluster, levels = paste0('cluster_', seq(1, 23))))
 
 head(hierarchical_clusters)
 ```
@@ -140,6 +141,123 @@ ggplot(expr_targets, aes(x = age_group, y = counts, group = gene)) +
 ```
 
 # Hierarchical clustering
+
+## TF enrichment
+```{r TF_enrichment}
+# select TFs that occur in all 3 Steiner trees in design 2
+TFs = c('AHR','ATF1','BACH2','FLI1','FOXO3','GATA4','GTF2B','HIF1A','KAT5',
+        'LYL1','MAFF','MAZ','NOTCH1','NR2C2','SRC','STAT1','STAT3','TCF7L2','TEAD4')
+
+# load TF target info
+TF_targets <- read.delim(paste0(dir, "Data/tf_targets_anno.csv"), sep = ",") %>%
+  filter(TF %in% TFs) %>%
+  filter(TF != "BACH2")
+
+# count number of targets per TF and cluster
+targets_per_cluster <- left_join(hierarchical_clusters, 
+                                 dplyr::rename(TF_targets, 'gene' = 'target')) %>%
+  group_by(TF, cluster) %>%
+  summarize(number_of_targets = n()) %>%
+  drop_na()
+
+# for normalization: number of genes per cluster and percentages that each TF targets
+genes_per_cluster <- group_by(hierarchical_clusters, cluster) %>% summarize(n = n()) %>%
+  filter(n > 10)
+
+wide <- filter(targets_per_cluster, cluster %in% genes_per_cluster$cluster) %>%
+  spread(key = cluster, value = number_of_targets, fill = 0) %>%
+  column_to_rownames('TF')
+wide <- t(t(wide)/genes_per_cluster$n) 
+
+pheatmap(wide, clustering_method = 'ward.D2', scale = "row")
+```
+
+
+## Chromosome distribution
+```{r chrom_dist}
+ggplot(hierarchical_clusters, aes(x = chrom)) +
+  geom_histogram() +
+  facet_wrap(~cluster, scale = "free_y") + theme_bw()
+```
+
+
+## Purity
+```{r node_type_purity_hierarchical}
+# add number of edges per type to the cluster information
+results <- hierarchical_clusters %>%
+  subset(select = c(locus, cluster)) %>% distinct() %>%
+  right_join(edge_types) %>%
+  mutate(max_edges = factor(max_edges, levels = c('young_specific', 'shared', 'old_specific'))) %>%
+  filter(cluster %in% genes_per_cluster$cluster)
+
+ggplot(results, aes(x = max_edges, fill = max_edges)) +
+  geom_histogram(stat = "count") + 
+  facet_wrap(~cluster, scale = "free_y", ncol = 3) +
+  theme_bw() + 
+  theme(axis.text.x=element_blank(), 
+        axis.ticks.x=element_blank(), 
+        axis.title.x = element_blank()) + 
+  guides(fill=guide_legend(title="Node type")) +
+  ylab('Number of nodes per category') +
+  theme(text = element_text(size = 15))
+```
+
+
+```{r mean_edges_hierarchical}
+edges <- subset(results, select = c(locus, cluster,young_specific,
+                                         old_specific, shared)) %>%
+  gather(key = "type", value = value, -c(locus, cluster)) %>%
+  mutate(type = factor(type, levels = c('young_specific', 'shared', 'old_specific')))
+
+ggplot(edges, aes(x = type, y = value, fill = type)) + 
+  geom_boxplot() + 
+  facet_wrap(~cluster, ncol = 3, scale = "free_y") +
+  theme_bw() + 
+  theme(axis.text.x=element_blank(), 
+        axis.ticks.x=element_blank(), 
+        axis.title.x = element_blank()) + 
+  guides(fill=guide_legend(title="Edge type")) +
+  ylab('Number of edges per locus') +
+  theme(text = element_text(size = 15))
+```
+
+
+## Number of TFs that target a gene
+```{r TFs_per_gene}
+# count by how many TFs a gene is targeted
+TF_targets <- read.delim(paste0(dir, "Data/tf_targets_anno.csv"), sep = ",")
+count_TFs <- group_by(TF_targets, target) %>%
+  summarize(n_TFs = n()) %>%
+  arrange(desc(n_TFs)) %>%
+  dplyr::rename(gene = target)
+
+# add numbers of TFs to the clustering df
+TFs_per_gene <- hierarchical_clusters %>% 
+  left_join(count_TFs) %>%
+  filter(cluster %in% genes_per_cluster$cluster)
+
+# boxplot of the results
+ggplot(TFs_per_gene, aes(x = cluster, y = n_TFs)) +
+  geom_boxplot() + 
+  theme_bw() +
+  ylab('number of TFs targeting each gene') + 
+  theme(axis.title.x = element_blank())+
+  theme(text = element_text(size = 15))
+```
+
+```{r}
+# get number of target genes and loci per selected TF
+
+# Select TFs that occur in all 3 Steiner trees in design 2
+TFs = c('BACH2', 'GTF2B','HIF1A', 'STAT3','TCF7L2')
+
+group_by(TF_targets, TF) %>%
+  filter(TF %in% TFs) %>%
+  summarize(number_of_target_genes = length(unique(target)), 
+            number_of_target_loci = length(unique(locus)))
+```
+
+
 ## Expression patterns for cluster 4
 ```{r expression_cluster4, fig.height = 3}
 # Get expression values for genes in cluster 4
@@ -181,46 +299,6 @@ ggplot(gene_cluster, aes(x = age_group, y = counts, group = gene)) +
   theme(text = element_text(size = 14))
 ```
 
-## Expression patterns for cluster 5
-```{r expression_cluster5, fig.height = 3}
-# Get expression values for genes in cluster 5
-expr_targets <- inner_join(hierarchical_clusters, mean_counts) %>%
-  filter(cluster == "cluster_5") %>%
-  subset(select = c(gene, age_group, counts)) %>%
-  spread(key = age_group, value = counts) 
-
-# Create matrix
-hclust_matrix <- select(expr_targets, -gene) %>%
-  as.matrix()
-rownames(hclust_matrix) <- expr_targets$gene
-
-# Z-transform values for each gene
-hclust_matrix %<>% t() %>% scale() %>% t()
-
-# Calculate euclidean distances between genes
-gene_dist <- dist(hclust_matrix)
-
-# Clustering
-gene_hclust <- hclust(gene_dist, method = "ward.D2")
-
-# Plot dendrogram
-plot(gene_hclust, labels = FALSE)
-
-# Cut tree  
-gene_cluster <- cutree(gene_hclust, k = 3) %>% 
-  enframe() %>% 
-  dplyr::rename(gene = name, cluster = value) %>%
-  left_join(group_by(mean_counts, gene) %>% mutate(counts = scale(counts)))
-
-# Plot expression patterns
-ggplot(gene_cluster, aes(x = age_group, y = counts, group = gene)) +
-  geom_line(alpha = 0.3) +
-  facet_wrap(~cluster, nrow = 1)+
-  geom_line(stat = "summary", fun = "median", colour = "brown", size = 1.2, aes(group = 1)) +
-  theme_bw() +
-  ylab('normalized RNAseq counts')+
-  theme(text = element_text(size = 14))
-```
 
 ## Expression patterns for all BACH2 targets
 ```{r expression_cluster_BACH2, fig.height = 3}
@@ -265,13 +343,102 @@ write.csv(gene_cluster, paste0(dir, "Data/BACH2_expression_clusters.csv"), row.n
 ```
 
 
+# Loci activity
+## BACH2 targets
+```{r loci_activity, fig.width = 4}
+loci_activity <- read.delim(paste0(dir, "Data/tf_targets_anno.csv"), sep = ",")  %>%
+  filter(TF == "BACH2") %>%
+  subset(select = c(locus, young_activity, old_activity)) %>%
+  distinct() %>%
+  gather(key = 'celltype', value = 'activity', -locus) %>%
+  separate(celltype, c('age', NA)) %>%
+  separate(activity, c(NA, 'activity')) %>%
+  mutate(age = factor(age, levels = c('young', 'old')))
+head(loci_activity)
+
+ggplot(loci_activity, aes(x = age, y = locus)) +
+  geom_tile(aes(fill = activity)) + 
+  theme(axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) +
+  theme(text = element_text(size = 20))
+```
 
 
+```{r loci_activity_clustered, fig.width = 4}
+# clustering of the loci based on the activity
+loci_activity_numbers <-  read.delim(paste0(dir, "Data/tf_targets_anno.csv"), sep = ",")  %>%
+  filter(TF == "HIF1A") %>%
+  subset(select = c(locus, young_activity, old_activity)) %>% 
+  distinct() %>%
+  mutate(young_activity = ifelse(young_activity == "young:inactive", 0, 1)) %>% 
+  mutate(old_activity = ifelse(old_activity == "old:inactive", 0, 1)) %>%
+  column_to_rownames('locus')
+
+ord <- hclust(dist(loci_activity_numbers, method = "euclidean"), method = "ward.D" )$order
+
+loci_activity <-loci_activity_numbers %>%
+  mutate(locus = factor(rownames(loci_activity_numbers), 
+                        levels = rownames(loci_activity_numbers)[ord])) %>%
+  gather(key = 'age', value = 'activity', -locus) %>%
+  separate(age, c('age', NA)) %>%
+  mutate(age = factor(age, levels = c('young', 'old'))) %>%
+  mutate(activity = ifelse(activity == 0, 'inactive', 'active'))
+head(loci_activity)
+
+ggplot(loci_activity, aes(x = age, y = locus)) +
+  geom_tile(aes(fill = activity)) + 
+  theme(axis.text.y=element_blank(), 
+        axis.ticks.y=element_blank()) +
+  theme(text = element_text(size = 20))
+```
 
 
+## Comparison to other TFs
+```{r}
+get_activities <- function(selected_TF){
+  loci_activity <-  read.delim(paste0(dir, "Data/tf_targets_anno.csv"), sep = ",")  %>%
+    filter(TF == selected_TF) %>%
+    subset(select = c(locus, young_activity, old_activity)) %>% 
+    distinct() %>%
+    mutate(activity = paste0(young_activity, "_", old_activity)) 
+  loci_activity %<>% group_by(activity) %>%
+    summarize(percent = n() / nrow(loci_activity)) %>%
+    mutate(TF = selected_TF)
+  return(loci_activity)
+}
+```
+
+```{r}
+# TFs that occur in all Steiner trees
+selected_TFs = c('AHR','ATF1','BACH2','FLI1','FOXO3','GATA4','GTF2B','HIF1A','KAT5',
+        'LYL1','MAFF','MAZ','NOTCH1','NR2C2','SRC','STAT1','STAT3','TCF7L2','TEAD4')
+
+results <- lapply(selected_TFs, get_activities) %>%
+  bind_rows() %>%
+  mutate(selection = "Steiner-tree_TFs")
+
+# select random TFs that are not included in one of the Steiner trees
+incl_TFs = unique(read.delim(paste0(dir, "Data/pcst/incl_TFs_design2.csv"), sep = ",")$TF)
+set.seed(20220818)
+random_TFs = sample(setdiff(unique(TF_targets$TF), incl_TFs), 19)
+results_random <- lapply(random_TFs, get_activities) %>%
+  bind_rows() %>%
+  mutate(selection = "random_TFs")
+results <- bind_rows(results, results_random)
+```
+
+```{r boxplot_activity_TFs}
+ggplot(results, aes(x = selection, y = percent, fill = selection)) +
+  geom_boxplot() +
+  facet_wrap(~activity, nrow = 2, scale = "free_y") +
+  theme_bw() +
+  theme(text = element_text(size = 15)) +
+  theme(axis.text.x=element_blank(), 
+        axis.ticks.x=element_blank()) +
+  xlab("") +
+  ylab("percent of loci")
+```
 
 
-## Expression patterns for all expressed genes
-
-
+# Expression patterns for all expressed genes
 

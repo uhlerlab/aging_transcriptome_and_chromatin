@@ -1,0 +1,151 @@
+---
+title: "13_intermingling_TF_group45_DE"
+author: "Jana"
+date: "2023-02-20"
+output: BiocStyle::html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
+figdir = paste0(dir, "Figures/intermingling_TFs_group5_DE/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+
+set.seed(202210)
+library(showtext)
+font_add("Arial", "/Library/Fonts/Arial.ttf")
+showtext_auto()
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr)
+library(pheatmap)
+```
+
+
+# Load data
+## TF centrality and TF enrichment for targeting DE genes
+```{r}
+TF_centrality <- read.delim(paste0(dir, "Data/TFs_centrality_group5.csv"), sep = ",") %>%
+  relocate(TF) %>%
+  mutate(adj_pval = ifelse(adj_pval > 1, 1, adj_pval))
+tail(TF_centrality)
+```
+
+## TF expression
+```{r}
+counts <- read.delim(paste0(dir, "Data/count_data.csv"), sep = ",") %>%
+  subset(select = c(gene, age_group, counts)) %>%
+  group_by(gene, age_group) %>%
+  summarize(counts = mean(counts)) %>% 
+  ungroup() %>%
+  group_by(gene) %>%
+  summarize(mean_expr = mean(counts), var_expr = var(counts)) %>%
+  dplyr::rename(TF = gene)
+head(counts)
+```
+
+## Intermingling
+```{r}
+im_DE_targets <- read.delim(paste0(dir, "Data/spec_intermingling_group5.csv"), sep = ",")
+head(im_DE_targets)
+```
+
+# More cell state specific intermingling for significant TFs?
+```{r intermingling_signif_TFs, fig.width=10}
+intermingling_signif <- TF_centrality %>%
+  subset(select = c(TF, adj_pval)) %>%
+  mutate(significant_TFs = ifelse(adj_pval < 0.05, 'Significant \n DE targeting', 'Non significant \n DE targeting')) %>%
+  left_join(im_DE_targets) 
+
+ggplot(intermingling_signif, aes(x = significant_TFs, y = spec_intermingling, fill = significant_TFs)) + 
+  geom_boxplot() + 
+  theme_bw() +
+  ylab('% of specific intermingling between \n the target DE genes per TF') + 
+  xlab('Bridge TFs') +
+  theme(text = element_text(size = 18)) + 
+  scale_fill_manual(values=c("#aaaaaa", "#c6d02a"))
+```
+
+
+
+```{r}
+# T-test
+t.test(dplyr::filter(intermingling_signif, 
+                     significant_TFs == 'Significant \n DE targeting')$spec_intermingling, 
+       dplyr::filter(intermingling_signif, 
+                     significant_TFs == 'Non significant \n DE targeting')$spec_intermingling, 
+       mu = 0, alternative = "greater")
+```
+
+# Number of TFs targeting each DE gene
+```{r n_TFs_per_gene, fig.width = 10}
+target_counts <- read.delim(paste0(dir, "Data/n_TFs_per_group5_DE_gene.csv"), sep = ",") %>%
+  mutate(intermingling = recode(intermingling, True = "With specific \n intermingling", False = "No specific \n intermingling"))
+
+ggplot(target_counts, aes(x = intermingling, y = n_TFs, fill = intermingling)) + 
+  geom_boxplot() + 
+  theme_bw() +
+  ylab('Number of Bridge TFs targeting them') + 
+  xlab('Target DE genes') +
+  theme(text = element_text(size = 18)) + 
+  scale_fill_manual(values=c("#aaaaaa", "#c6d02a"))
+```
+
+```{r}
+# T-test for young
+t.test(dplyr::filter(target_counts, intermingling == 'With specific \n intermingling')$n_TFs, 
+       dplyr::filter(target_counts, intermingling == "No specific \n intermingling")$n_TFs, 
+       mu = 0, alternative = "greater")
+```
+
+
+# Clustered heatmaps for the TFs
+```{r young_net_clustering, fig.height=8}
+TF_features <- TF_centrality %>%
+  left_join(counts) %>%
+  left_join(im_DE_targets) %>%
+  mutate(DE_enrichment = -adj_pval) %>%
+  gather(key = 'measure', value = 'value', -TF) %>%
+  group_by(measure) %>%
+  #mutate(value = rank(value, ties.method = 'average')) %>%
+  #mutate(value = (value - min(value)) / (max(value) - min(value))) %>%
+  mutate(value = scale(value)) %>%
+  mutate(value = ifelse(value < -1.5, -1.5, value)) %>%
+  mutate(value = ifelse(value > 1.5, 1.5, value)) %>%
+  spread(key = measure, value = value) %>%
+  column_to_rownames(var = 'TF') %>%
+  subset(select = c('mean_expr', 'var_expr', 'all_targets', 'DE_targets', 'katz_centrality', 
+                    'PPIs', 'DE_enrichment', 'spec_intermingling', 'shared_intermingling'))
+
+out <- pheatmap(subset(TF_features, select = c('DE_targets', 'katz_centrality', 'PPIs', 
+                                        'DE_enrichment', 'spec_intermingling')), 
+                cluster_cols = FALSE)
+TF_order <- rownames(TF_features[out$tree_row[["order"]], ])
+```
+
+```{r young_net, fig.height=10, fig.width=10}
+pheatmap(TF_features[TF_order,], cluster_cols = FALSE, cluster_rows = FALSE, 
+         labels_col = c('Mean of the median \n expression per age group', 'Variance of the median \n expression per age group',
+                        'Number of targets \n in the genome', 'Number of targets in \n the target DE genes',
+                        'Katz centrality', 'Number of PPI neighbors', 
+                        'Enrichment p-value \n of DE target genes',
+                        '% of specific intermingling \n between the DE target genes', 
+                        '% of consistent intermingling \n between the DE target genes'), 
+         fontsize = 11, fontsize_col = 14, fontsize_row = 10)
+```
+
+```{r young_net_selected_cols, fig.height=14, fig.width=4}
+pheatmap(TF_features[TF_order,c('all_targets', 'DE_enrichment', 'spec_intermingling')], cluster_cols = FALSE, cluster_rows = FALSE, 
+         labels_col = c('Number of targets \n in the genome', 
+                        'Enrichment p-value of \n DE target genes in S1',
+                        '% of specific intermingling \n between the DE target \n genes in S1'), 
+         fontsize = 11, fontsize_col = 14, fontsize_row = 10)
+```
+
+
+
