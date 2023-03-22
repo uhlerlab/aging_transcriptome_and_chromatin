@@ -1,12 +1,14 @@
 {
   "HIC_DIR": "/home/braunger/masterthesis/save/processed_hic_data/",
-  "MEFISTO_DIR": "/home/braunger/masterthesis/data/MOFA/",
   "TF_DIR": "/home/braunger/masterthesis/save/TF_targets/",
+  "BLACKLIST_DIR": "/home/braunger/rejuvenation_project/data/processed_hic_data/",
   "GENOME_DIR": "/home/braunger/masterthesis/data/genome_data/",
-  "CELL_TYPE": "old_fibroblasts",
+  "PCST_DIR": "/home/braunger/masterthesis/save/pcst/",
+  "CELL_TYPE": "Young_combi",
   "HIC_RESOLUTION": 250000,
   "HIC_RESOLUTION_STR": "250kb",
   "chrs": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ,11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
-  "SUBSET": "BACH2", 
-  "LAS_THRESHOLD": 30
+  "SUBSET": "all_gene_loci", 
+  "LAS_THRESHOLD_INTER": 20,
+  "LAS_THRESHOLD_INTRA": 5
 }

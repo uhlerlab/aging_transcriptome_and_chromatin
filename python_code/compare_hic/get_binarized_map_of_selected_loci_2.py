@@ -5,6 +5,8 @@ import os, os.path
 import pickle
 import numpy as np 
 import matplotlib as mpl
+from matplotlib.colors import ListedColormap
+from matplotlib.patches import Patch
 mpl.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
@@ -167,16 +169,29 @@ def plot_binarized_maps(young, old):
         young: (pd DataFrame) binarized matrix with IMR90 data
         old: (pd DataFrame) binarized matrix with old_fibroblast data
     Returns:
-        Two heatmaps
+        Three heatmaps: binarized map for young, for old, as well as difference map
     '''
-    fig, axs = plt.subplots(1, 2, figsize = (12, 4))
+    fig, axs = plt.subplots(1, 3, figsize = (16, 4))
     sns.heatmap(young, cmap = "Reds", ax = axs[0], xticklabels=False, yticklabels=False)
     axs[0].set_ylabel('') 
-    axs[0].set_title('Young fibroblasts (16 weeks)')
+    axs[0].set_title('Young fibroblasts')
 
     sns.heatmap(old, cmap = "Reds", ax = axs[1], xticklabels=False, yticklabels=False)
     axs[1].set_ylabel('') 
-    axs[1].set_title('Old fibroblasts (53 years)')
+    axs[1].set_title('Old fibroblasts')
+    
+    # create difference map
+    diff_map = young + 2 * old
+    diff_map = diff_map.loc[(diff_map!=0).any(axis=1), (diff_map!=0).any(axis=1)]
+    
+    # define colors
+    palette = sns.color_palette("tab10")
+    colors = ['whitesmoke', palette[3], palette[0], palette[2]]
+    cmap = ListedColormap(colors)
+
+    sns.heatmap(diff_map, cmap = cmap, xticklabels=False, yticklabels=False, ax = axs[2])
+    axs[2].set_ylabel('') 
+    axs[2].set_title("Difference map")
 
     
 def plot_clustered_anno(df, selected_loci):
@@ -215,10 +230,152 @@ def plot_clustered_anno(df, selected_loci):
     plt.legend(handles, ['True', 'False'], title='DE gene',
                bbox_transform=plt.gcf().transFigure, bbox_to_anchor=(1., 0.3, 1., .102), loc='lower left')
         
-    
-    #return(p)
-    
 
+def get_TF_intermingling(TFs, tf_dir, hic_dir, threshold_young, threshold_old):
+    '''
+    Generates dfs with the percentages of intermingling per cell type as well as the percentages of interaction types 
+    (no, young specific, old specific, shared intermingling) between the targets of selected TFs
+    Args:
+        TFs: (list) list of TFs
+        tf_dir: (string) directory of the TF_target file
+        hic_dir: (string) hic directory 
+        threshold_young: LAS threshold for young HiC map
+        threshold_old: LAS threshold for old HiC map
+    Returns:
+        two pd DataFrames with the percentages of intermingling and interaction types between TF targets
+    '''
+    chr_list = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ,11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22]
+    resol = 250000
+    
+    # Load TF target interactions with loci annotation of the targets
+    tf_targets = pd.read_csv(tf_dir + 'TF_targets_anno.csv', sep = ',')
+    
+    # DataFrame to save the results
+    intermingling = pd.DataFrame({'young': [], 'old': []})
+    differences = pd.DataFrame({'no_intermingling': [], 'young_specific': [], 'old_specific': [], 'shared': []})
+    
+    for TF in TFs: 
+        selected_loci = tf_targets.loc[tf_targets['TF'] == TF, 'locus'].tolist()
+        
+        # Binarize map for young and old fibroblasts
+        hic_IMR90 = get_binarized_hic(selected_loci, chr_list, hic_dir, 'IMR90', resol, threshold_young)
+        hic_old = get_binarized_hic(selected_loci, chr_list, hic_dir, 'old_fibroblasts', resol, threshold_old)
+        
+        # Calculate percentage of intermingling regions 
+        total = hic_IMR90.shape[0]
+        row = pd.DataFrame({'young': [hic_IMR90['value'].sum() / total], 
+                            'old': [hic_old['value'].sum() / total]}, index = [TF])
+        intermingling = pd.concat([intermingling, row])
+        
+        # Get percentages of differences between young and old
+        diff = hic_IMR90['value'] + 2 * hic_old['value']
+        row = pd.DataFrame({'no_intermingling': [diff[diff == 0].shape[0] / total],
+                            'young_specific': [diff[diff == 1].shape[0] / total],
+                            'old_specific': [diff[diff == 2].shape[0] / total],
+                            'shared': [diff[diff == 3].shape[0] / total]}, index = [TF])
+        differences = pd.concat([differences, row])
+    return intermingling, differences
+
+
+def plot_clustered_diff_map(diff_map, TF, save_dir):
+    '''
+    Hierarchical clustering of the difference map for the targets of a TF
+    Args:
+        diff_map: (pd DataFrame) difference map for the targets of a TF
+        TF: (string) TF of interest
+        save_dir: (string) save directory
+    Returns:
+        clustered diff_map
+    '''
+    # load TF targets and their activity
+    tf_targets = pd.read_csv(save_dir + 'TF_targets/' + 'TF_targets_anno.csv', sep = ',')
+    targets_activity = tf_targets[tf_targets['TF'] == TF]
+    targets_activity = targets_activity[['locus', 'young_activity', 'old_activity']].drop_duplicates()
+
+    # color annotation bar: loci activity
+    color_dict_y = {}
+    color_dict_o = {}
+    
+    for loc in diff_map.columns:
+        if targets_activity.loc[targets_activity['locus'] == loc, 'young_activity'].item() == "young:active":
+            color_dict_y[loc] = 'red'
+        else:
+            color_dict_y[loc] = 'lightgrey'
+
+        if targets_activity.loc[targets_activity['locus'] == loc, 'old_activity'].item() == "old:active":
+            color_dict_o[loc] = 'blue'
+        else:
+            color_dict_o[loc] = 'lightgrey'
+
+    color_rows = pd.Series(color_dict_y)
+    color_rows2 = pd.Series(color_dict_o)
+
+    # define difference colors
+    palette = sns.color_palette("tab10")
+    colors = ['whitesmoke', palette[3], palette[0], palette[2]]
+    cmap = ListedColormap(colors)
+
+    plt.figure()
+    p = sns.clustermap(diff_map,
+                   method='complete',
+                   metric=color_metric,
+                   row_cluster=True, col_cluster=True,
+                   figsize=(5,5),
+                   xticklabels=False, yticklabels=False,
+                   cmap=cmap, cbar_pos=(1, 0.5, 0.01, .4),
+                   vmin=0, vmax=3,
+                   dendrogram_ratio=(.1, .1), 
+                   row_colors= [color_rows, color_rows2], col_colors = [color_rows, color_rows2])
+
+    # add legends for annotation bars
+    handles = [Patch(facecolor='red'), Patch(facecolor='lightgrey')]
+    first_legend = plt.legend(handles, ['active', 'inactive'], title='young activity',
+               bbox_transform=plt.gcf().transFigure, bbox_to_anchor=(1., 0.15, 1., .102), loc='lower left')
+    ax = plt.gca().add_artist(first_legend)
+
+    handles = [Patch(facecolor='blue'), Patch(facecolor='lightgrey')]
+    plt.legend(handles, ['active', 'inactive'], title='old activity',
+               bbox_transform=plt.gcf().transFigure, bbox_to_anchor=(1.25, 0.15, 1., .102), loc='lower left')
+
+
+def color_dist(l1, l2): 
+    '''
+    Calculates the distance between two interaction types (0: no intermingling, 1: only intermingles in first matrix, 
+    2: only intermingles in second one, 3: intermingling in both) for a difference matrix comparing two HiC maps
+    Args:
+        l1: (float) type of interaction for a loci pair
+        l2: (float) type of interaction for a loci pair
+    Returns:
+        integer that is the difference between the interactions
+    '''
+    if l1 == l2:
+        diff = 0 
+    elif (l1 == 0) & (l2 == 3):
+        diff = 2
+    elif (l1 == 3) & (l2 == 0):
+        diff = 2
+    elif (l1 == 1) & (l2 == 2):
+        diff = 2
+    elif (l1 == 2) & (l2 == 1):
+        diff = 2
+    else: 
+        diff = 1
+    return diff
+
+
+def color_metric(r1, r2): # metric to calculate distance between two row vectors
+    '''
+    Calculates the distance between two row vectors for a difference matrix comparing two HiC maps
+    Args:
+        r1: (pd Series) row vector 1
+        r2: (pd Series) row vector 2
+    Returns:
+        integer that is the mean difference between the two row vectors
+    '''
+    dist = [color_dist(r1[ix], r2[ix]) for ix in range(len(r1))]
+    return np.mean(dist)
+
+    
 def parse_config(config_filename):
     '''
     Reads config file

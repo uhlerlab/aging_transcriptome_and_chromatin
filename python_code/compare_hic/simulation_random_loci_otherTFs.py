@@ -14,9 +14,10 @@ import pandas as pd
 import itertools
 from tqdm import tqdm
 import time
+import random
 from scipy.cluster.hierarchy import dendrogram, linkage, fcluster, inconsistent
 
-''' This script runs 100 simulations and outputs the mean number of intermingling regions'''
+''' This script runs 100 simulations with TFs not included in the Steiner trees and outputs the percentage of intermingling regions in the targets'''
 
 def bin_intermingling_regions_hic_resoln(df_intermingling, chr1, chr2, resol):
     # break up large intermingling regions into 250kb bins (or resolution of HiC data)
@@ -162,6 +163,7 @@ def main():
     config = parse_config(config_filename)
     hic_dir = config['HIC_DIR']
     tf_dir = config['TF_DIR']
+    pcst_dir = config['PCST_DIR']
     genome_dir = config['GENOME_DIR']
     resol_str = config['HIC_RESOLUTION_STR']
     resol = config['HIC_RESOLUTION']
@@ -170,55 +172,62 @@ def main():
     
     threshold_young = 15
     threshold_old = 30
+    random.seed(202208)
     
-    # Loci of the set of interest
-    selected_loci = pd.read_csv(tf_dir + subset + '_targets_loci.csv')['locus'].unique()
-    # get list of chromosome for the loci set of interest
-    chromosome_list = [locus.split("_")[1] for locus in selected_loci]
+    # Load TFs that are included in the Steiner trees
+    incl_TFs = set(pd.read_csv(pcst_dir + 'incl_TFs_design2.csv')['TF'])
     
-    # Load available loci per chromosome
-    all_gene_loci = pd.DataFrame({'locus': pd.read_csv(genome_dir+'all_gene_loci.csv')['locus'].unique()})
-    all_gene_loci[['chr','chr_number', 'loc', 'loc_number']]=all_gene_loci.locus.str.split('_',expand=True)
+    # Load TF target interactions with loci annotation of the targets
+    tf_targets = pd.read_csv(tf_dir + 'TF_targets_anno.csv', sep = ',')
+    # Filter for TFs that have more than 20 targets
+    number_of_targets = tf_targets['TF'].value_counts().rename_axis('TF').reset_index(name='n_targets')
+    number_of_targets = number_of_targets[number_of_targets['n_targets'] > 100]
+    tf_targets = tf_targets[tf_targets['TF'].isin(number_of_targets['TF'])]
+    
+    # Get non-included TFs
+    non_incl_TFs = sorted(list(set(tf_targets['TF']).difference(incl_TFs)))
+    print('Number of TFs that are not included in one of the Steiner trees and ',  
+          'have more than 100 targets: ', len(non_incl_TFs))
+    
+    # Randomly select 100 non-included TFs
+    non_incl_TFs = random.sample(non_incl_TFs, 100)
     
     # DataFrame to save the results
     intermingling = pd.DataFrame({'young': [], 'old': []})
-    differences = pd.DataFrame({'young_specific': [], 'old_specific': [], 'shared': []})
+    differences = pd.DataFrame({'no_intermingling': [], 'young_specific': [], 'old_specific': [], 'shared': []})
     
-    # 100 simulations of selecting 58 random gene loci
+    # 100 simulations for non-included TFs
     print('Start 100 simulations of randomly selected loci')
     for n_sim in tqdm(range(100)):
         time.sleep(0.01)
         
-        # Select random loci (same amount per chromosome as in set of interest)
-        random_loci = []
-        for chrom in chr_list:
-            n = chromosome_list.count(str(chrom))
-            loci = all_gene_loci[all_gene_loci['chr_number'] == str(chrom)].sample(n, random_state=202208+n_sim).sort_index()['locus']
-            random_loci.append(loci)
-        # flatten list 
-        random_loci = list(itertools.chain(*random_loci))
-        print(len(random_loci))
+        # Select loci based on targets of a non-included TF
+        print('TF: ', non_incl_TFs[n_sim])
+        random_loci = tf_targets.loc[tf_targets['TF'] == non_incl_TFs[n_sim], 'locus'].tolist()
+        print('number of target loci: ', len(random_loci))
         
         # Binarize map for young and old fibroblasts
         hic_IMR90 = get_binarized_hic(random_loci, chr_list, hic_dir, 'IMR90', resol, threshold_young)
         hic_old = get_binarized_hic(random_loci, chr_list, hic_dir, 'old_fibroblasts', resol, threshold_old)
         
-        # Calculate number of intermingling regions 
-        row = pd.DataFrame({'young': [hic_IMR90['value'].sum()], 
-                            'old': [hic_old['value'].sum()]})
-        intermingling = pd.concat([intermingling, row], ignore_index = True)
+        # Calculate percentage of intermingling regions 
+        total = hic_IMR90.shape[0]
+        row = pd.DataFrame({'young': [hic_IMR90['value'].sum() / total], 
+                            'old': [hic_old['value'].sum() / total]}, index = [non_incl_TFs[n_sim]])
+        intermingling = pd.concat([intermingling, row])
         
-        # Differences between young and old
-        diff_vec = hic_IMR90['value'] + 2 * hic_old['value']
-        total = len(diff_vec[diff_vec != 0])
-        row_diff = pd.DataFrame({'young_specific': [len(diff_vec[diff_vec == 1]) / total], 
-                                 'old_specific': [len(diff_vec[diff_vec == 2]) / total],
-                                 'shared': [len(diff_vec[diff_vec == 3]) / total]})
-        differences = pd.concat([differences, row_diff], ignore_index = True)
+        # Get percentages of differences between young and old
+        diff = hic_IMR90['value'] + 2 * hic_old['value']
+        row = pd.DataFrame({'no_intermingling': [diff[diff == 0].shape[0] / total],
+                            'young_specific': [diff[diff == 1].shape[0] / total],
+                            'old_specific': [diff[diff == 2].shape[0] / total],
+                            'shared': [diff[diff == 3].shape[0] / total]}, index = [non_incl_TFs[n_sim]])
+        differences = pd.concat([differences, row])
+        
     
-    intermingling.to_csv(hic_dir + 'simulation_intermingling_random_loci.csv')
-    differences.to_csv(hic_dir + 'simulation_diff_random_loci.csv')
-        
+    intermingling.to_csv(hic_dir + 'simulation_intermingling_non_incl_TFs.csv')
+    differences.to_csv(hic_dir + 'simulation_diff_non_incl_TFs.csv')
+    
 
 if __name__ == "__main__":
     main()

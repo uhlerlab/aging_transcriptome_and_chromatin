@@ -16,21 +16,21 @@ import gseapy
 from gseapy.plot import barplot, dotplot
 
 
-def get_prizes(transition, data_dir, p_thr):
-    """ Gets prizes for differentially expressed genes (t -> t+1) and highly expressed TFs (at time t)
+def get_prizes(group, data_dir):
+    """ Gets prizes for differentially expressed genes 
     
     Args:
-        transition: (string) information about which transition to use e.g. "0_10"
+        group: (string) information about which DE genes to use
         data_dir: (string) directory that contains the data files
-        p_thr: (string) threshold for the p-values to prize DE genes
     
     Returns:
         df with the protein prizes
     """
     # Load DE data and filter df to the specified transition (t -> t+1)
-    de_genes = pd.read_csv(data_dir+'de_data/DE_var_p_n_'+p_thr+'.csv')
-    de_genes = de_genes[de_genes['transition'] == "fc_" + transition]
-    de_genes.columns = ['name', 'transition', 'prize']
+    de_genes = pd.read_csv(data_dir+'de_data/DE_'+group+'.csv')
+    de_genes.columns = ['name', 'fc', 'padj', 'prize', 'updown']
+    #if group == "Group5":
+    #    de_genes = de_genes[de_genes['updown'] == 'up']
     de_genes = de_genes[['name', 'prize']]
     
     return(de_genes)
@@ -53,8 +53,8 @@ def get_prizes_combi(tr0, tr1, data_dir, save_dir, interactome, p_thr, cell_type
         df with the protein prizes
     """
     # Load DE data for the two transitions
-    de_genes_0 = get_prizes(tr0, data_dir, p_thr)
-    de_genes_1 = get_prizes(tr1, data_dir, p_thr)
+    de_genes_0 = get_prizes('Group1', data_dir)
+    de_genes_1 = get_prizes('Group5', data_dir)
     
     # Filter DE genes to the ones included in STRING 
     proteins = [prot[:-4] for prot in set(interactome['protein1']).union(set(interactome['protein2']))]
@@ -65,27 +65,7 @@ def get_prizes_combi(tr0, tr1, data_dir, save_dir, interactome, p_thr, cell_type
     de_genes_0['name'] = de_genes_0['name'] + "_tr0"
     de_genes_1['name'] = de_genes_1['name'] + "_tr1"
     
-    # Add prizes to TFs (design 2, 3, 4) or all genes (design 5) from the "next older" network
-    next_step = [step for step in step_list if step.startswith(tr1)]
-    if len(next_step) == 0 or design == 1: #oldest network
-        prizes = pd.concat([de_genes_0, de_genes_1])
-    else:       
-        net = pickle.load(open(save_dir + "network_"+cell_type+"_"+p_thr+"_step_"+next_step[0]+
-                               "_design_" + str(design) +".pickle", "rb"))
-        nodes = pd.DataFrame(net.nodes)[0].str.split("_", expand=True)
-        nodes.columns = ['protein', 'transition']
-        nodes = nodes.loc[nodes['transition'] == 'tr0', 'protein'].tolist()
-        
-        if design == 2 or design == 3 or design == 4: 
-            TFs = set(pd.read_csv(data_dir + 'tf_data/tf-target-information.txt', sep = '\t')['TF'])
-            nodes = [node for node in nodes if node in TFs]
-        
-        nodes = [node + '_tr1' for node in nodes]
-        old_prizes = pd.DataFrame({'name': nodes, 'prize': np.min(de_genes_1['prize'])})
-        
-        # Combine all prized genes
-        prizes = pd.concat([de_genes_0, de_genes_1, old_prizes]).groupby('name').max().reset_index()
-    
+    prizes = pd.concat([de_genes_0, de_genes_1])
     return(prizes)
 
 
@@ -150,34 +130,12 @@ def get_PPI(step, data_dir, save_dir, cell_type, p_thr, step_list, design):
     tf_targets['protein2'] = tf_targets['protein2'] + "_tr1"                                                   
     tf_targets = tf_targets[tf_targets['protein1'].isin(interactome_tr0['protein1'])]
     
-    # nodes on the right based on the ones included in the next net
-    next_step = [step for step in step_list if step.startswith(tr1)]
-    if len(next_step) != 0 and design == 4: 
-        net = pickle.load(open(save_dir + "network_"+cell_type+"_"+p_thr+"_step_"+next_step[0]+
-                               "_design_" + str(design) +".pickle", "rb"))
-        nodes_right = pd.DataFrame(net.nodes)[0].str.split("_", expand=True)
-        nodes_right.columns = ['protein', 'transition']
-        nodes_right = nodes_right.loc[nodes_right['transition'] == 'tr0', 'protein'].tolist()
-        nodes_right = [node + '_tr1' for node in nodes_right]
-    else: 
-        nodes_right = get_prizes_combi(tr0, tr1, data_dir, save_dir, interactome_tr0, 
-                                       p_thr, cell_type, step_list, design)['name'].tolist()
-        nodes_right = [node for node in nodes_right if node.endswith('_tr1')]
-    
+    nodes_right = get_prizes_combi(tr0, tr1, data_dir, save_dir, interactome_tr0, 
+                                   p_thr, cell_type, step_list, design)['name'].tolist()
+    nodes_right = [node for node in nodes_right if node.endswith('_tr1')]
     tf_targets = tf_targets[tf_targets['protein2'].isin(nodes_right)]
     
-    # add edges for transition 1
-    if design == 3 or design == 4 or design == 5: 
-        interactome_tr1 = PPI.copy()
-        interactome_tr1['protein1'] = interactome_tr1['protein1'] + "_tr1"
-        interactome_tr1['protein2'] = interactome_tr1['protein2'] + "_tr1"
-        interactome_tr1 = interactome_tr1[(interactome_tr1['protein1'].isin(nodes_right)) & 
-                                         (interactome_tr1['protein2'].isin(nodes_right))]
-    else: 
-        interactome_tr1 = pd.DataFrame({'protein1': [], 'protein2': [], 'cost': []})
-        
-    
-    return(interactome_tr0, tf_targets, interactome_tr1)
+    return(interactome_tr0, tf_targets)
     
 
 def run_pcst(graph_params, interactome_file_name, prize_file_name):
@@ -227,8 +185,8 @@ def run_pcst_combi(step, graph_params, data_dir, save_dir, cell_type, p_thr, ste
     tr1 = step.split("_")[1]+"_"+step.split("_")[2]
     
     # Get PPI: STRING interactome & TF-target interactions
-    interactome_tr0, tf_targets, interactome_tr1 = get_PPI(step, data_dir, save_dir, cell_type, p_thr, step_list, design)
-    interactome = pd.concat([interactome_tr0, tf_targets, interactome_tr1])
+    interactome_tr0, tf_targets = get_PPI(step, data_dir, save_dir, cell_type, p_thr, step_list, design)
+    interactome = pd.concat([interactome_tr0, tf_targets])
     interactome.to_csv(data_dir + 'ppi_data/PPI_string_TFs.csv', sep='\t')
     interactome_file_name = data_dir + 'ppi_data/PPI_string_TFs.csv'    
     
@@ -266,22 +224,16 @@ def save_net_html(net, incl_TFs, save_dir, name, design):
     nodes['category'][nodes['transition'] == 'tr1'] = "DE_tr1"
     nodes['TF'] = "No bridge TF"
     nodes['TF'][nodes['name'].isin(incl_TFs)] = "Bridge TF"
-    nodes['group'] = 'left'
-    nodes['group'][nodes['TF'] == 'Bridge TF'] = 'middle'
-    nodes['group'][nodes['category'] == 'DE_tr1'] = 'right'
-    category_dict = {node: nodes.loc[nodes['name'] == node, 'category'].values[0] for node in nodes['name']}
+    group_dict = {node: nodes.loc[nodes['name'] == node, 'category'].values[0] for node in nodes['name']}
     TF_dict = {node: nodes.loc[nodes['name'] == node, 'TF'].values[0] for node in nodes['name']}
-    group_dict = {node: nodes.loc[nodes['name'] == node, 'group'].values[0] for node in nodes['name']}
     label_dict = {node: '' for node in nodes['name']}
-    nx.set_node_attributes(net, category_dict, name='categories')
-    nx.set_node_attributes(net, TF_dict, name='TFs')
     nx.set_node_attributes(net, group_dict, name='groups')
+    nx.set_node_attributes(net, TF_dict, name='TFs')
     nx.set_node_attributes(net, label_dict, name= 'labels')
     
     # Save the results
     p_thr, cell_type, step = name.split(".")
-    oi.output_networkx_graph_as_interactive_html(net, filename=save_dir+"net_"+cell_type+"_"+p_thr+"_step_"+step+
-                                                 "_design_" + str(design) +".html")
+    oi.output_networkx_graph_as_interactive_html(net, filename=save_dir+"net_robustness_G1_G45.html")
     
     return(group_dict)
 
@@ -331,7 +283,7 @@ def compare_networks(net_dict, data_dir, fig_dir, save_dir, step_list, TFs_with_
         tf_targets = get_TF_targets(data_dir, cell_type)
         
         # Number of targets in the genome
-        STRING, tf_targets_subset, interactome_tr1 = get_PPI(step, data_dir, save_dir, cell_type, p_thr, step_list, design)
+        STRING, tf_targets_subset = get_PPI(step, data_dir, save_dir, cell_type, p_thr, step_list, design)
         proteins = [prot[:-4] for prot in set(STRING['protein1']).union(set(STRING['protein2']))]
         tf_targets = tf_targets[tf_targets['protein1'].isin(proteins)]
         tf_targets = tf_targets[tf_targets['protein2'].isin(proteins)]
@@ -407,123 +359,52 @@ def get_net_dir_all_stages(save_dir, cell_type, p_thr, design):
     Returns:
         Dictionary including the augmented forests
     """
-    steps = ["1-15_16-26_27-60", "16-26_27-60_61-85", "27-60_61-85_86-96"]
+    steps = ["1-15_16-26_27-60"]
     net_dir = {}
     
     for step in steps:
-        augmented_forest = pickle.load(open(save_dir + "network_" + cell_type + "_" + p_thr + "_step_" + step + 
-                                            "_design_" + str(design) + ".pickle", "rb"))
+        augmented_forest = pickle.load(open(save_dir + "network_robustness_G1_G45.pickle", "rb"))
         net_dir[p_thr+"."+cell_type+ "." + step] = augmented_forest
     
     return(net_dir)
 
 
-def create_subnet(cluster, corr_long, TF_clusters, data_dir, save_dir, thr):
-    """ Creates and saves a network for the correlation of selected TFs
+def save_net_html(net, incl_TFs, save_dir, name, design):
+    """ Saves the net with node attributes as interactive html
     
     Args:
-        cluster: (int) number of the cluster
-        corr_long: (pandas DataFrame) correlation matrix of all TFs
-        TF_clusters: (pandas DataFrame) df with number of cluster for each TF
-        data_dir: (string) name of the data directory
-        save_dir: (string) name of the save directory
-        thr: (float) threshold for correlation
+        net: augmented forest solution from OmicsIntegrator2
+        incl_TFs: (set) TFs that are included in the network
+        save_dir: (string) directory that contains the processed prize data
+        name: (string) name including the p_thr (1%, 5% or 10%), cell_type (fibroblasts or allTFs) and step (e.g. 0_10_20)
+        design: (int) which design to choose (1-3)
     
     Returns:
-        None
+        nodes: pd DataFrame including the category for each node
     """
-    tf_targets = pd.read_csv(data_dir + 'tf_data/tf-target-information.txt', sep = '\t')
-    tf_targets = tf_targets[['TF', 'target']].drop_duplicates()
+    # Get nodes and assign attributes (Steiner node, DE_tr0, TF, DE_tr1)
+    network_df = oi.get_networkx_graph_as_dataframe_of_nodes(net)
+    nodes = pd.DataFrame(net.nodes)[0].str.split("_", expand=True)
+    nodes.columns = ['protein', 'transition']
+    nodes['name'] = nodes['protein'] + "_" + nodes['transition']
+    nodes['category'] = 'Steiner node'
+    nodes['category'][nodes['name'].isin(network_df.loc[network_df['terminal'] == True,:].index.tolist())] = "DE_tr0"
+    nodes['category'][nodes['transition'] == 'tr1'] = "DE_tr1"
+    nodes['TF'] = "No bridge TF"
+    nodes['TF'][nodes['name'].isin(incl_TFs)] = "Bridge TF"
+    group_dict = {node: nodes.loc[nodes['name'] == node, 'category'].values[0] for node in nodes['name']}
+    TF_dict = {node: nodes.loc[nodes['name'] == node, 'TF'].values[0] for node in nodes['name']}
+    label_dict = {node: '' for node in nodes['name']}
+    nx.set_node_attributes(net, group_dict, name='groups')
+    nx.set_node_attributes(net, TF_dict, name='TFs')
+    nx.set_node_attributes(net, label_dict, name= 'labels')
     
-    selected_TFs = TF_clusters[TF_clusters['cluster'] == cluster]['TF'].tolist()
-    tf_targets_sub = tf_targets[tf_targets['TF'].isin(selected_TFs)]
-    corr_selected = corr_long[corr_long['protein1'].isin(selected_TFs)]
-    corr_selected = corr_selected[corr_selected['protein2'].isin(selected_TFs)]
-
-    corr_selected['shared_targets'] = corr_selected.apply(lambda row : len(set(tf_targets_sub.loc[tf_targets_sub['TF'] == row['protein1'], 'target']).intersection(set(tf_targets_sub.loc[tf_targets_sub['TF'] == row['protein2'], 'target']))), axis = 1)
-    corr_selected['targets_protein1'] = corr_selected.apply(lambda row : len(set(tf_targets_sub.loc[tf_targets_sub['TF'] == row['protein1'], 'target'])), axis = 1)
-    corr_selected['targets_protein2'] = corr_selected.apply(lambda row : len(set(tf_targets_sub.loc[tf_targets_sub['TF'] == row['protein2'], 'target'])), axis = 1)
-    corr_selected['percent_shared_targets'] = corr_selected['shared_targets']/corr_selected[['targets_protein1', 'targets_protein2']].min(axis=1)
-
-    corr_selected = corr_selected[(corr_selected['corr'] > thr)].sort_values(by = 'percent_shared_targets')
-    # Add additional row such that the coloring is not inverted
-    df = {'protein1': selected_TFs[0], 'protein2': selected_TFs[0], 'corr': 1, 'shared_targets': 0, 
-          'targets_protein1': 0, 'targets_protein2': 0, 'percent_shared_targets': 0}
-    corr_selected = corr_selected.append(df, ignore_index = True)
+    # Save the results
+    p_thr, cell_type, step = name.split(".")
+    oi.output_networkx_graph_as_interactive_html(net, filename=save_dir+"net_"+cell_type+"_"+p_thr+"_step_"+step+
+                                                 "_design_" + str(design) +".html")
     
-    network = nx.from_pandas_edgelist(corr_selected, 'protein1', 'protein2', ['corr', 'shared_targets', 'percent_shared_targets'])
-    oi.output_networkx_graph_as_interactive_html(network, filename=save_dir + 'TFs_cluster_'+str(cluster) + ".html")
-
-
-def GSEA_DE_targets(transition, direction, data_dir, de_dir):
-    """ Creates GSEA barplot for the differentially expressed targets of a TF
-    
-    Args:
-        transition: (string) name of the transition
-        direction: (string) "up" or "down" specifying up- or downregulated genes
-        data_dir: (string) name of the data directory
-        de_dir: (string) name of the DE gene directory
-    
-    Returns:
-        Barplot
-    """
-    # Load TF target interactions
-    tf_targets = pd.read_csv(data_dir + 'tf_data/tf-target-information.txt', sep = '\t')
-    tf_targets = tf_targets[['TF', 'target']].drop_duplicates()
-
-    # Load differentially expressed genes
-    DE_genes = pd.read_csv(de_dir+'DE_updown.csv')
-    DE_genes = DE_genes[DE_genes['transition'] == transition]
-    DE_genes = DE_genes[DE_genes['updown'] == direction]
-    
-    # Select DE targets of all TF
-    #targets = tf_targets.loc[(tf_targets['TF'] == TF) & (tf_targets['target'].isin(DE_genes['gene'])), 'target']
-    #print(str(len(targets))+ " out of "+ str(len(tf_targets.loc[tf_targets['TF']==TF, 'target'])) 
-    #      + " targets are differentially expressed.")
-    targets = list(tf_targets.loc[(tf_targets['target'].isin(DE_genes['gene'])), 'target'].unique())
-    print(len(targets))
-    
-    # GSEA
-    enr = gseapy.enrichr(gene_list=targets, 
-                         gene_sets='GO_Biological_Process_2021', 
-                         description='', format='png',
-                         verbose=False)
-    
-    # Visualize results
-    g = barplot(enr.res2d, title= transition + "_" + direction,
-            cutoff=0.05, top_term=5, figsize=(5, 5), color='salmon')
-    return(g)
-
-
-def TF_redundancy(TF_list, name, data_dir, save_dir):
-    """ Creates html network of TF redundancy (TFs targeting each other), as well as measure for network density
-    
-    Args:
-        TF_list: (list) list of TFs
-        name: (string) name for saving the network
-        data_dir: (string) name of the data directory
-        save_dir: (string) name of the pcst save directory
-    
-    Returns:
-        Network density measurement epsilon (number of edges / number of nodes) 
-    """
-    tf_targets = pd.read_csv(data_dir + 'tf_data/tf-target-information.txt', sep = '\t')
-    tf_targets = tf_targets[['TF', 'target']].drop_duplicates()
-    tf_targets = tf_targets[tf_targets['TF'].isin(TF_list)]
-    tf_targets = tf_targets[tf_targets['target'].isin(TF_list)]
-    tf_targets['weight'] = 0.5
-
-    # save network with node attribute for self-targets
-    network = nx.from_pandas_edgelist(tf_targets, 'TF', 'target', 'weight', create_using=nx.DiGraph())
-    self_targeting_dict = {}
-    for TF in tf_targets.loc[tf_targets['TF'] == tf_targets['target'], 'TF']:
-        self_targeting_dict[TF] = 'True'
-    nx.set_node_attributes(network, self_targeting_dict, name='self-targeting')
-    oi.output_networkx_graph_as_interactive_html(network, filename=save_dir + "TF_redundancy_" + name + ".html")
-
-    # measurement of network density
-    epsilon = tf_targets.shape[0]/len(TF_list)
-    return(epsilon)
+    return(nodes)
 
 
 def main():
@@ -551,14 +432,12 @@ def main():
     design = config['design']
     
     # Run PCST combined for two following transitions
-    print("Run combined pcst for each step:")
+    print("Run pcst with Group1-specfic genes as source DE and Group4-5 specific genes as target DE genes")
     for step in step_list:
-        print("Step " + step)
         
         augmented_forest = run_pcst_combi(step, graph_params, data_dir, save_dir, cell_type, p_thr, step_list, design)
         oi.output_networkx_graph_as_pickle(augmented_forest, 
-                                           filename= save_dir + "network_"+cell_type+"_"+p_thr+"_step_"+step+
-                                           "_design_" + str(design) +".pickle")
+                                           filename= save_dir + "network_robustness_G1_G45.pickle")
     
 
 if __name__ == "__main__":
