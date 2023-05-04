@@ -25,6 +25,7 @@ showtext_auto()
 library(tidyverse)
 library(magrittr)
 library(pheatmap)
+library(RColorBrewer)
 ```
 
 
@@ -75,24 +76,27 @@ head(int_young_DE)
 # Clustered heatmaps
 ## Young network TFs
 ```{r young_net_clustering, fig.height=8}
+signif_TFs <- c('CEBPB', 'FLI1', 'MAZ', 'SUMO2', 'AHR', 'EP300')
 TF_features <- TF_centrality_young %>%
   subset(select = -net) %>%
+  filter(TF %in% signif_TFs) %>%
   left_join(counts) %>%
   left_join(int_young_DE) %>%
-  mutate(DE_enrichment = -adj_pval) %>%
+  mutate(DE_enrichment = adj_pval) %>%
   gather(key = 'measure', value = 'value', -TF) %>%
   group_by(measure) %>%
   #mutate(value = rank(value, ties.method = 'average')) %>%
   #mutate(value = (value - min(value)) / (max(value) - min(value))) %>%
   mutate(value = scale(value)) %>%
-  mutate(value = ifelse(value < -1.5, -1.5, value)) %>%
-  mutate(value = ifelse(value > 1.5, 1.5, value)) %>%
+  mutate(value = ifelse(value < -2, -2, value)) %>%
+  mutate(value = ifelse(value > 2, 2, value)) %>%
   spread(key = measure, value = value) %>%
   column_to_rownames(var = 'TF') %>%
   subset(select = c('mean_expr', 'var_expr', 'all_targets', 'DE_targets', 'katz_centrality', 
                     'PPIs', 'DE_enrichment', 'spec_intermingling', 'shared_intermingling'))
 
 anno <- filter(pcst_groups, net %in% c('shared')) %>%
+  filter(TF %in% signif_TFs) %>%
   subset(select = c('TF', 'net')) %>% distinct() %>%
   mutate(TF = factor(TF, levels = rownames(TF_features))) %>%
   arrange(TF) %>%
@@ -106,7 +110,7 @@ TF_order <- rownames(TF_features[out$tree_row[["order"]], ])
 ```
 
 
-```{r young_net, fig.height=10, fig.width=10}
+```{r young_net, fig.height=6, fig.width=10}
 pheatmap(TF_features[TF_order,], cluster_cols = FALSE, cluster_rows = FALSE, 
          annotation_row = anno, annotation_legend = FALSE, 
          labels_col = c('Mean of the median \n expression per age group', 'Variance of the median \n expression per age group',
@@ -118,35 +122,41 @@ pheatmap(TF_features[TF_order,], cluster_cols = FALSE, cluster_rows = FALSE,
          fontsize = 11, fontsize_col = 14, fontsize_row = 10)
 ```
 
-```{r young_net_selected_cols, fig.height=14, fig.width=4}
-pheatmap(TF_features[TF_order,c('all_targets', 'DE_enrichment', 'spec_intermingling')], cluster_cols = FALSE, cluster_rows = FALSE, 
+```{r young_net_selected_cols, fig.height=10, fig.width=3}
+breakslist = seq(-2, 2, by = 0.1)
+TF_features %<>% arrange(DE_enrichment, desc(spec_intermingling))
+pheatmap(TF_features[,c('DE_enrichment', 'spec_intermingling')], cluster_cols = FALSE, cluster_rows = FALSE, 
          annotation_row = anno, annotation_legend = FALSE, 
-         labels_col = c('Number of targets \n in the genome', 
-                        'Enrichment p-value of \n DE target genes in S1',
+         labels_col = c('Enrichment p-value of \n DE target genes in S1',
                         '% of specific intermingling \n between the DE target \n genes in S1'), 
-         fontsize = 11, fontsize_col = 14, fontsize_row = 10)
+         fontsize = 11, fontsize_col = 14, fontsize_row = 10, breaks = breakslist, 
+         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breakslist)))
 ```
 
 ## Old network TFs
 ```{r old_net_clustering, fig.height=8}
+signif_TFs <- c('E2F1', 'KDM4C', 'POLR2A', 'HOXA6', 'HDAC1', 'TAF3', 'GTF2B',
+                'RBBP5', 'NOTCH1', 'GABPA', 'MNT', 'BRD2', 'KAT5', 'BMI1', 'ZNF384')
 TF_features <- TF_centrality_old %>%
   subset(select = -net) %>%
+  filter(TF %in% signif_TFs) %>%
   left_join(counts) %>%
   left_join(int_old_DE) %>%
-  mutate(DE_enrichment = -adj_pval) %>%
+  mutate(DE_enrichment = adj_pval) %>%
   gather(key = 'measure', value = 'value', -TF) %>%
   group_by(measure) %>%
   #mutate(value = rank(value, ties.method = 'average')) %>%
   #mutate(value = (value - min(value)) / (max(value) - min(value))) %>%
   mutate(value = scale(value)) %>%
-  mutate(value = ifelse(value < -1.5, -1.5, value)) %>%
-  mutate(value = ifelse(value > 1.5, 1.5, value)) %>%
+  mutate(value = ifelse(value < -2, -2, value)) %>%
+  mutate(value = ifelse(value > 2, 2, value)) %>%
   spread(key = measure, value = value) %>%
   column_to_rownames(var = 'TF') %>%
   subset(select = c('mean_expr', 'var_expr', 'all_targets', 'DE_targets', 'katz_centrality',
                     'PPIs', 'DE_enrichment', 'spec_intermingling', 'shared_intermingling'))
 
 anno <- filter(pcst_groups, net %in% c('shared')) %>%
+  filter(TF %in% signif_TFs) %>%
   subset(select = c('TF', 'net')) %>% distinct() %>%
   mutate(TF = factor(TF, levels = rownames(TF_features))) %>%
   arrange(TF) %>%
@@ -159,28 +169,40 @@ out <- pheatmap(subset(TF_features, select = c('DE_targets', 'katz_centrality', 
 TF_order <- rownames(TF_features[out$tree_row[["order"]], ])
 ```
 
-```{r old_net, fig.height=10, fig.width = 10}
+```{r old_net, fig.height=9, fig.width = 10}
 pheatmap(TF_features[TF_order,], cluster_cols = FALSE, cluster_rows = FALSE, 
          annotation_row = anno, annotation_legend = FALSE, 
          labels_col = c('Mean over the mean \n expression per age group', 'Variance of the mean \n expression per age group',
                         'Number of targets \n in the genome', 'Number of targets in \n the S3 target DE genes',
-                        'Katz centrality \n in S1', 'Number of PPI \n neighbors in S3', 
+                        'Katz centrality \n in S3', 'Number of PPI \n neighbors in S3', 
                         'Enrichment p-value of \n DE target genes in S3',
                         '% of specific intermingling \n between the DE target \n genes in S3', 
                         '% of consistent intermingling \n between the DE target \n genes in S3'), 
          fontsize = 11, fontsize_col = 14, fontsize_row = 10)
 ```
 
-```{r old_net_selected_cols, fig.height=14, fig.width = 5}
-pheatmap(TF_features[TF_order, c('var_expr', 'all_targets', 'DE_enrichment', 'spec_intermingling')], cluster_cols = FALSE, cluster_rows = FALSE, 
+```{r old_net_selected_cols, fig.height=10, fig.width = 3}
+breakslist = seq(-2, 2, by = 0.1)
+TF_features %<>% arrange(DE_enrichment, desc(spec_intermingling))
+pheatmap(TF_features[, c('DE_enrichment', 'spec_intermingling')], cluster_cols = FALSE, cluster_rows = FALSE, 
          annotation_row = anno, annotation_legend = FALSE, 
-         labels_col = c('Variance of the mean \n expression per age group',
+         labels_col = c('Enrichment p-value of \n DE target genes in S3',
+                        '% of specific intermingling \n between the DE target \n genes in S3'), 
+         fontsize = 11, fontsize_col = 14, fontsize_row = 10, breaks = breakslist, 
+         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breakslist)))
+```
+
+
+```{r old_net_selected_cols_t, fig.height=6, fig.width = 12}
+pheatmap(t(TF_features[TF_order, c('var_expr', 'all_targets', 'DE_enrichment', 'spec_intermingling')]), 
+         cluster_cols = FALSE, cluster_rows = FALSE, 
+         annotation_col = anno, annotation_legend = FALSE, 
+         labels_row = c('Variance of the mean \n expression per age group',
                         'Number of targets \n in the genome', 
                         'Enrichment p-value of \n DE target genes in S3',
                         '% of specific intermingling \n between the DE target \n genes in S3'), 
-         fontsize = 11, fontsize_col = 14, fontsize_row = 10)
+         fontsize = 11, fontsize_row = 16, fontsize_col = 10)
 ```
-
 
 ## Combine young and old features for shared TFs
 ```{r}
@@ -232,7 +254,8 @@ intermingling_signif <- TF_centrality_young %>%
   mutate(net = factor(net, levels = c('Steiner network S1', 'Steiner network S3')))
 
 ggplot(intermingling_signif, aes(x = significant_TFs, y = spec_intermingling, fill = significant_TFs)) + 
-  geom_boxplot() + 
+  geom_boxplot(outlier.size = 0) + 
+  geom_jitter(width = 0.15, height = 0, alpha = 0.4, size = 2) +
   facet_wrap(~net) + 
   theme_bw() +
   ylab('% of specific intermingling between \n the target DE genes per TF') + 
@@ -282,7 +305,7 @@ ggplot(target_counts, aes(x = intermingling, y = n_TFs, fill = intermingling)) +
   geom_boxplot() + 
   facet_wrap(~net) + 
   theme_bw() +
-  ylab('Number of Bridge TFs targeting them') + 
+  ylab('Number of Bridge TF regulators') + 
   xlab('Target DE genes') +
   theme(text = element_text(size = 18)) + 
   scale_fill_manual(values=c("#aaaaaa", "#c6d02a"))

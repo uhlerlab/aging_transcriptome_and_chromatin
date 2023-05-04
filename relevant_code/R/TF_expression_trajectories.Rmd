@@ -1,0 +1,127 @@
+---
+title: "TF expression trajectories"
+author: "Jana Braunger"
+date: '2023-05-04'
+output: BiocStyle::html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
+figdir = paste0(dir, "Figures/TF_expr/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+
+library(showtext)
+font_add("Arial", "/Library/Fonts/Arial.ttf")
+showtext_auto()
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr)
+library(ggbeeswarm)
+```
+
+# Load data
+## Variance-stabilized transformed expression values for all genes in all individuals
+```{r}
+counts <- read.delim(paste0(dir, "Data/vst_counts.csv"), sep = ",")
+head(counts)
+```
+
+## TF groups from the Steiner trees
+```{r}
+pcst_groups <- read.delim(paste0(dir, "Data/specific_TFs_targets.csv"), sep = ",")  %>%
+  mutate(net = factor(net, levels = c('young_net', 'middle_net', 'old_net', 'shared')))
+head(pcst_groups)
+```
+
+
+# PCST groups
+```{r}
+plot_TF_expression <- function(TFs){
+  TF_expr <- filter(counts, gene %in% TFs) %>%
+    # if two ensembl ids correspond to the same TF take the mean count
+    group_by(gene, names, Age, age_group) %>%
+    summarize(counts = mean(counts)) 
+  
+  ggplot(TF_expr, aes(x = Age, y = counts, group = gene, color = gene)) +
+    geom_point(color = 'grey') +
+    theme_bw() + 
+    facet_wrap(~gene, scales = "free_y") +
+    theme(legend.position="none") + 
+    theme(text = element_text(size = 13),
+          strip.text.x = element_text(size = 16)) +
+    xlab("Age") + 
+    ylab("Normalized expression") +
+    geom_smooth(color = "brown")
+}
+
+plot_TF_mean_expression <- function(TFs){
+  TF_expr <- filter(counts, gene %in% TFs) %>%
+    # if two ensembl ids correspond to the same gene take the mean count
+    group_by(gene, names, Age, age_group) %>%
+    summarize(counts = mean(counts)) 
+  
+  ggplot(TF_expr, aes(x = age_group, y = counts, group = gene, color = gene)) +
+    geom_point(color = 'grey', alpha = 0.4) +
+    #geom_beeswarm(color = 'grey', cex = 3) +
+    theme_bw() + 
+    facet_wrap(~gene, scales = "free_y") +
+    theme(legend.position="none") + 
+    theme(text = element_text(size = 13),
+          strip.text.x = element_text(size = 15),
+          axis.text.x = element_text(angle = 90)) +
+    xlab("Age") + 
+    ylab("Normalized expression") +
+    geom_line(stat = "summary", fun = "mean", colour = "brown", size = 1, aes(group = 1))
+}
+```
+
+
+## Shared TFs
+```{r shared_TFs, fig.height=4}
+TFs <- unique(filter(pcst_groups, net == "shared")$TF)
+plot_TF_mean_expression(TFs) +facet_wrap(~gene, scales = "free_y", nrow = 3)
+```
+
+## Old-specific TFs
+```{r old_TFs, fig.height=4}
+TFs <- unique(filter(pcst_groups, net == "old_net")$TF)
+
+plot_TF_mean_expression(TFs) +facet_wrap(~gene, scales = "free_y", nrow = 3)
+```
+
+## Young-specific TFs
+```{r young_TFs, fig.height=4}
+TFs <- unique(filter(pcst_groups, net == "young_net")$TF)
+plot_TF_mean_expression(TFs)+facet_wrap(~gene, scales = "free_y", nrow = 3)
+```
+
+
+## Middle network specific TFs
+```{r middle_TFs, , fig.height=5}
+TFs <-  unique(filter(pcst_groups, net == "middle_net")$TF)
+plot_TF_mean_expression(TFs) +facet_wrap(~gene, scales = "free_y", ncol = 7)
+```
+
+
+# Significant bridge TFs
+## Steiner network S1
+```{r expr_S1_TFs, fig.height = 2.5}
+genes <-  c("CEBPB", "FLI1", "MAZ", "SUMO2", "AHR", "EP300")
+plot_TF_mean_expression(genes) + 
+  facet_wrap(~gene, scales = "free_y", nrow = 1)
+```
+
+## Steiner network S3
+```{r expr_S3_TFs, fig.height = 6}
+genes <-  c('E2F1', 'KDM4C', 'POLR2A', 'HOXA6', 'HDAC1', 'TAF3', 'GTF2B',
+                'RBBP5', 'NOTCH1', 'GABPA', 'MNT', 'BRD2', 'KAT5', 'BMI1', 'ZNF384')
+plot_TF_mean_expression(genes) + 
+  facet_wrap(~gene, scales = "free_y", ncol = 6)
+```

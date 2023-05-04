@@ -89,8 +89,6 @@ DE1 <- subset(DE1, select = c(gene, log2FoldChange, pvalue, padj)) %>%
   rownames_to_column(var = "ensembl_id") %>%
   filter(gene != "") %>%
   drop_na(padj) %>%
-  group_by(gene) %>% # mean over transcripts belonging to the same gene
-  summarize(log2FoldChange = max(log2FoldChange), padj = min(padj)) %>%
   mutate(abs_log2_fc = abs(log2FoldChange)) %>%
   arrange(padj) %>%
   mutate(updown = ifelse(log2FoldChange > 0, 'up', 'down'))
@@ -124,8 +122,6 @@ DE5 <- subset(DE5, select = c(gene, log2FoldChange, pvalue, padj)) %>%
   rownames_to_column(var = "ensembl_id") %>%
   filter(gene != "") %>%
   drop_na(padj) %>%
-  group_by(gene) %>% # mean over transcripts belonging to the same gene
-  summarize(log2FoldChange = max(log2FoldChange), padj = min(padj)) %>%
   mutate(abs_log2_fc = abs(log2FoldChange)) %>%
   arrange(desc(abs_log2_fc)) %>%
   mutate(updown = ifelse(log2FoldChange > 0, 'up', 'down'))

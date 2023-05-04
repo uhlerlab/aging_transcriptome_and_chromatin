@@ -1,0 +1,80 @@
+---
+title: "14_RNA_comparison_Fleischer_Shivashankar"
+author: "Jana"
+date: "2023-04-25"
+output: BiocStyle::html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
+RNA_dir = paste0("/Users/janabraunger/Documents/Studium/Master/Boston/rejuvenation_project/data/RNAseq/")
+figdir = paste0(dir, "Figures/RNAseq_processing/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+
+library(showtext)
+font_add("Arial", "/Library/Fonts/Arial.ttf")
+showtext_auto()
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr)
+library(tximport)
+library(ensembldb)
+library(EnsDb.Hsapiens.v86)
+```
+
+# RNA-seq data from the Shivashankar lab
+```{r }
+# set file paths to the RNAseq data from the Shivashankar lab
+runs_info <- data.frame(names = c("Young_1", "Young_2", "Old_1", "Old_2"),
+                        samples = c("Y9503_1_quant.sf", "Y9503_2_quant.sf",
+                                   "O8401_1_quant.sf", "O8401_2_quant.sf"))
+runs_info$files <- paste0(RNA_dir, runs_info$samples)
+
+txdf <- transcripts(EnsDb.Hsapiens.v86, return.type="DataFrame")
+tx2gene <- as.data.frame(txdf[,c("tx_id", "gene_id")])
+
+# create summarized experiment with tximport and extract counts
+txi <- tximport(runs_info$files, type="salmon", tx2gene=tx2gene, ignoreTxVersion = TRUE)
+counts_Shiva <- data.frame(txi$abundance)
+colnames(counts_Shiva) <- runs_info$names
+#counts_Shiva %<>% mutate(Young_avg = (counts_Shiva$Young_1 + counts_Shiva$Young_2) / 2) %>%
+#  mutate(Old_avg = (counts_Shiva$Old_1 + counts_Shiva$Old_2) / 2)
+
+#dds <- DESeqDataSet(txi, design = ~ age_group)
+# differential expression analysis
+#dds <- DESeq(dds)
+
+head(counts_Shiva)
+```
+
+# RNA-seq data from Fleischer 
+```{r}
+# Definition of the age groups
+age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
+                         age_group = c(rep('1-15', 15), rep('16-26', 11), 
+                                      rep('27-60', 34), rep('61-85', 25),
+                                      rep('86-96', 11)))
+
+# File path
+runs_info <- read.delim(paste0(dir, "Data/SraRunTable.txt"), sep = ",") %>%
+  mutate(Age = gsub("y[rs]\\d+mos", "", Age)) %>%
+  mutate(Age = gsub("yr", "", Age)) %>%
+  left_join(age_groups) %>%
+  mutate(age_group = factor(age_group, levels = unique(age_groups$age_group))) %>%
+  dplyr::filter(disease == "Normal") 
+runs_info$names <- runs_info$Run
+runs_info$files <- paste0(dir, "Data/rna_counts/", runs_info$names, "_quant/quant.sf")
+
+# create summarized experiment with tximport and extract counts
+txi <- tximport(runs_info$files, type="salmon", tx2gene=tx2gene, ignoreTxVersion = TRUE)
+counts_Fleischer <- data.frame(txi$counts)
+```
+
+
+

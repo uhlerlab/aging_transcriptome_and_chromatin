@@ -1,0 +1,189 @@
+---
+title: "Expression pattern of selected DE genes over the five age groups"
+author: "Jana"
+date: "2023-05-04"
+output: BiocStyle::html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+BiocStyle::html_document 
+
+dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
+figdir = paste0(dir, "Figures/expr_pattern/")
+if(!dir.exists(figdir)) dir.create(figdir)
+knitr::opts_chunk$set(dev = c("png", "pdf"), fig.path = figdir)
+
+set.seed(202212)
+library(showtext)
+font_add("Arial", "/Library/Fonts/Arial.ttf")
+showtext_auto()
+```
+
+```{r load_libraries, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(magrittr)
+library(pheatmap)
+library(RColorBrewer)
+```
+
+
+# Load data
+## Variance-stabilized transformed RNAseq counts
+```{r}
+# mean vst values for each gene in each age group
+counts <- read.delim(paste0(dir, "Data/vst_counts.csv"), sep = ",") %>%
+  subset(select = c(ensembl_id, gene, age_group, counts)) %>%
+  group_by(ensembl_id, gene, age_group) %>%
+  summarize(counts = mean(counts)) %>%
+  ungroup() 
+head(counts)
+```
+
+
+## DE genes
+```{r}
+# DE genes
+DE_genes <- read.delim(paste0(dir, "Data/DE_var_p_n_200.csv"), sep = ",") %>%
+  subset(select = c(gene, transition))
+head(DE_genes)
+```
+
+
+# DE genes from two consecutive age groups (Fig. 1)
+## Group 1 vs. Group 2
+```{r G1_G2, fig.width = 20}
+z_scores <- inner_join(counts, DE_genes) %>% 
+  subset(select = -c(gene)) %>%
+  filter(transition == 'fc_1-15_16-26') %>%
+  group_by(ensembl_id) %>%
+  mutate(counts = scale(counts)) %>%
+  spread(key = age_group, value = counts) %>%
+  column_to_rownames(var = 'ensembl_id') %>%
+  subset(select = -transition)
+colnames(z_scores) <- c("Group 1", "Group 2", "Group 3", "Group 4", "Group 5")
+
+pheatmap(t(z_scores), cluster_rows = FALSE, show_colnames = FALSE, fontsize = 22)
+```
+
+## Group 2 vs. Group 3
+```{r expr_young_DE, fig.width = 20}
+z_scores <- inner_join(counts, DE_genes) %>% 
+  subset(select = -c(gene)) %>%
+  filter(transition == 'fc_16-26_27-60') %>%
+  group_by(ensembl_id) %>%
+  mutate(counts = scale(counts)) %>%
+  spread(key = age_group, value = counts) %>%
+  column_to_rownames(var = 'ensembl_id') %>%
+  subset(select = -transition)
+colnames(z_scores) <- c("Group 1", "Group 2", "Group 3", "Group 4", "Group 5")
+
+out <- pheatmap(t(z_scores), cluster_rows = FALSE, show_colnames = FALSE, fontsize = 22)
+gene_order <- rownames(z_scores[out$tree_col[["order"]], ])
+gene_order <- c(gene_order[27:162], gene_order[1:26])
+```
+
+## Group 3 vs. Group 4
+```{r G3_G4, fig.width = 20}
+z_scores <- inner_join(counts, DE_genes) %>% 
+  subset(select = -c(gene)) %>%
+  filter(transition == 'fc_27-60_61-85') %>%
+  group_by(ensembl_id) %>%
+  mutate(counts = scale(counts)) %>%
+  spread(key = age_group, value = counts) %>%
+  column_to_rownames(var = 'ensembl_id') %>%
+  subset(select = -transition)
+colnames(z_scores) <- c("Group 1", "Group 2", "Group 3", "Group 4", "Group 5")
+
+pheatmap(t(z_scores), cluster_rows = FALSE, show_colnames = FALSE, fontsize = 22)
+```
+
+## Group 4 vs. Group 5
+```{r expr_old_DE, fig.width = 20}
+z_scores <- inner_join(counts, DE_genes) %>% 
+  subset(select = -c(gene)) %>%
+  filter(transition == 'fc_61-85_86-96') %>%
+  group_by(ensembl_id) %>%
+  mutate(counts = scale(counts)) %>%
+  spread(key = age_group, value = counts) %>%
+  column_to_rownames(var = 'ensembl_id') %>%
+  subset(select = -transition)
+colnames(z_scores) <- c("Group 1", "Group 2", "Group 3", "Group 4", "Group 5")
+
+out <- pheatmap(t(z_scores), cluster_rows = FALSE, show_colnames = FALSE, fontsize = 22)
+gene_order <- rownames(z_scores[out$tree_col[["order"]], ])
+```
+
+# Signature DE genes (Fig. 4)
+## Upregulated Group1-specific genes
+```{r G1_up, fig.width = 20}
+DE_genes <- read.delim(paste0(dir, "Data/DE_Group1_up.csv"), sep = ",") %>%
+  subset(select = c(ensembl_id))
+
+z_scores <- inner_join(counts, DE_genes) %>%
+  subset(select = -c(gene)) %>%
+  group_by(ensembl_id) %>%
+  mutate(counts = scale(counts)) %>%
+  spread(key = age_group, value = counts) %>%
+  column_to_rownames(var = 'ensembl_id')
+colnames(z_scores) <- c("Group 1", "Group 2", "Group 3", "Group 4", "Group 5")
+breakslist = seq(-1.5, 1.5, by = 0.1)
+
+pheatmap(t(z_scores), cluster_rows = FALSE, show_colnames = FALSE, fontsize = 30, 
+         breaks = breakslist, color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breakslist)))
+```
+
+## Downregulated Group1-specific genes
+```{r G1_down, fig.width = 20}
+DE_genes <- read.delim(paste0(dir, "Data/DE_Group1_down.csv"), sep = ",") %>%
+  subset(select = c(ensembl_id))
+
+z_scores <- inner_join(counts, DE_genes) %>% 
+  subset(select = -c(gene)) %>%
+  group_by(ensembl_id) %>%
+  mutate(counts = scale(counts)) %>%
+  spread(key = age_group, value = counts) %>%
+  column_to_rownames(var = 'ensembl_id')
+colnames(z_scores) <- c("Group 1", "Group 2", "Group 3", "Group 4", "Group 5")
+breakslist = seq(-1.5, 1.5, by = 0.1)
+
+pheatmap(t(z_scores), cluster_rows = FALSE, show_colnames = FALSE, fontsize = 30, 
+         breaks = breakslist, color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breakslist)))
+```
+
+## Upregulated Group5-specific genes
+```{r G5_up, fig.width = 20}
+DE_genes <- read.delim(paste0(dir, "Data/DE_Group5_up.csv"), sep = ",") %>%
+  subset(select = c(ensembl_id))
+
+z_scores <- inner_join(counts, DE_genes) %>% 
+  subset(select = -c(gene)) %>%
+  group_by(ensembl_id) %>%
+  mutate(counts = scale(counts)) %>%
+  spread(key = age_group, value = counts) %>%
+  column_to_rownames(var = 'ensembl_id')
+colnames(z_scores) <- c("Group 1", "Group 2", "Group 3", "Group 4", "Group 5")
+breakslist = seq(-1.5, 1.5, by = 0.1)
+
+pheatmap(t(z_scores), cluster_rows = FALSE, show_colnames = FALSE, fontsize = 30,
+         breaks = breakslist, color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breakslist)))
+```
+
+## Downregulated Group5-specific genes
+```{r G5_down, fig.width = 20}
+DE_genes <- read.delim(paste0(dir, "Data/DE_Group5_down.csv"), sep = ",") %>%
+  subset(select = c(ensembl_id))
+
+z_scores <- inner_join(counts, DE_genes) %>% 
+  subset(select = -c(gene)) %>%
+  group_by(ensembl_id) %>%
+  mutate(counts = scale(counts)) %>%
+  spread(key = age_group, value = counts) %>%
+  column_to_rownames(var = 'ensembl_id')
+colnames(z_scores) <- c("Group 1", "Group 2", "Group 3", "Group 4", "Group 5")
+
+breakslist = seq(-1.5, 1.5, by = 0.1)
+
+pheatmap(t(z_scores), cluster_rows = FALSE, show_colnames = FALSE, fontsize = 30, 
+         breaks = breakslist, color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdYlBu")))(length(breakslist)))
+```

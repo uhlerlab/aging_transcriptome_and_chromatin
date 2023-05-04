@@ -1,5 +1,5 @@
 ---
-title: "RNAseq processing and differential expression"
+title: "RNA-seq processing and differential expression"
 author: "Jana Braunger"
 date: '2022-05-26'
 output: BiocStyle::html_document
@@ -33,45 +33,21 @@ library(glmnet)
 library(EnhancedVolcano)
 library(umap)
 library(biomaRt)
-#library(ggbeeswarm)
 ```
 
-This markdown is based on [this](https://master.bioconductor.org/packages/release/workflows/vignettes/rnaseqGene/inst/doc/rnaseqGene.html) vignette and describes the processing of the FASTQ files from the RNAseq data of Fleischer et al., as well as performing a differential expression analysis. The differentially expressed genes are then used for building Steiner trees.
+This markdown describes the processing of the FASTQ files from the RNAseq data of Fleischer et al., as well as defining age groups and performing a differential expression analysis between consecutive age groups. The selected differentially expressed genes are then used for building Steiner networks.
 
 # FASTQ files
-The FASTQ files from the study from [Fleischer et al.](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6300908/) were downloaded from the European Nucleotide Archive [ENA](https://www.ebi.ac.uk/ena/browser/home). The used accession numbers were: SRR7093809 - SRR7093951 
-
+The FASTQ files from the study from [Fleischer et al.](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6300908/) were downloaded from the European Nucleotide Archive [ENA](https://www.ebi.ac.uk/ena/browser/home) with accession numbers: SRR7093809 - SRR7093951 
 
 # Transcript quantification with Salmon
 For the transcript quantification the tool salmon was used according to [this](https://combine-lab.github.io/salmon/getting_started/) vignette.
 For the quantification, first a reference transcriptome is needed for the alignment. A human reference transcriptome can be downloaded from [ensemblgenomes](http://ftp.ensembl.org/pub/release-105/fasta/homo_sapiens/cdna/Homo_sapiens.GRCh38.cdna.all.fa.gz). Release 105 was used instead of the newest one 106 because tximeta only works for versions up to 105 at the moment. Then salmon was used to build an index on that transcriptome (salmon index -t ../genome_data/Homo_sapiens.GRCh38.cdna.all.fa.gz -i grch38_index). Finally, the samples were quantified with: salmon quant -i grch38_index -l A -r /mnt/jana/fastq/{sample}.fastq.gz -p 8 --validateMappings -o quants/{sample}_quant. This command produces an output folder for each sample that contains the quant.sf file, which includes the count values, used in the following.
 
-
 # Obtaining count data
 ## Reading in data with tximeta
 ```{r}
-#20-bins
-age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
-                         age_group = c(rep('1-19', 19), rep('20-39', 20), 
-                                       rep('40-59', 20), rep('60-79', 20),
-                                       rep('80-96', 17)))
-#same number of patients per bin
-age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
-                         age_group = c(rep('1-19', 19), rep('20-35', 16), 
-                                       rep('36-61', 26), rep('62-84', 23),
-                                       rep('85-96', 12)))
-
-#small-big-small
-age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
-                         age_group = c(rep('1-9', 9), rep('10-29', 20), 
-                                       rep('30-59', 30), rep('60-79', 20),
-                                       rep('80-89', 10), rep('90-96', 7)))
-
-age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
-                         age_group = c(rep('1-15', 15), rep('16-37', 22), 
-                                      rep('38-57', 20), rep('58-85', 28),
-                                      rep('86-96', 11)))
-
+# Definition of the age groups
 age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
                          age_group = c(rep('1-15', 15), rep('16-26', 11), 
                                       rep('27-60', 34), rep('61-85', 25),
@@ -128,9 +104,6 @@ dim(assay(gse))
 # filter for genes that have counts of at least 10 in at least 5 samples
 keep <- rowSums(assay(gse) >= 10) >= 5
 gse <- gse[keep,]
-
-#keep2 <- rowMax(assay(gse)) /rowMin(assay(gse)) > 5
-#gse <- gse[keep2,]
 
 assay(gse)[1:5, 1:5]
 dim(assay(gse))
@@ -371,7 +344,7 @@ upset(fromList(top_list), order.by = "freq", nsets = 9,
 ```{r pca, fig.height = 4, fig.width = 6}
 # variance-stabilizing transformation
 vsd <- vst(dds)
-#vsd <- vsd[rownames(vsd) %in% lasso$ensembl_id,]
+
 # PCA
 pca <- plotPCA(vsd, intgroup = c("age_group"), returnData = TRUE) 
 percentVar <- round(100 * attr(pca, "percentVar"))
@@ -522,12 +495,14 @@ EnhancedVolcano(expr_fc,
 
 # Hierarchical clustering to define the age groups
 ## LASSO
-```{r LASSO, fig.width = 7, fig.height=4.5}
+```{r LASSO, fig.width = 16, fig.height=4.5}
 df = data.frame(t(assay(gse))) %>%
   rownames_to_column(var = "sample") %>%
   left_join(rownames_to_column(subset(data.frame(colData(gse)), select = c("Age")), var = 'sample'))
 
+#lasso regression
 model <- glmnet(subset(df, select = -c(sample, Age)), df$Age, alpha = 1, lambda = 1)
+
 lasso <- data.frame(ensembl_id = dimnames(coef(model))[[1]], coefficient = matrix(coef(model))) %>%
   filter(coefficient != 0) %>%
   filter(ensembl_id != "(Intercept)") %>%
@@ -536,12 +511,15 @@ lasso_plot <- lasso %>%
   # add corresponding gene names to the ensembl ids
   left_join(dplyr::rename(as_tibble(subset(rowData(gse), select = c(gene_id, gene_name))), 
                           'ensembl_id' = 'gene_id')) %>%
-  filter(gene_name != "")
+  filter(gene_name != "") %>%
+  group_by(gene_name) %>%
+  summarize(coefficient = max(abs(coefficient))) %>%
+  arrange(desc(abs(coefficient))) 
 
 lasso_plot %<>% mutate(gene_name = factor(gene_name, levels = lasso_plot$gene_name)) 
 write.csv(lasso_plot, paste0(dir, "Data/lasso_genes.csv"), row.names = FALSE)
 
-ggplot(lasso_plot[1:25,], aes(x = gene_name, y = abs(coefficient))) +
+ggplot(lasso_plot, aes(x = gene_name, y = coefficient)) +
   geom_bar(stat='identity') +
   theme_bw() +
   xlab('LASSO-selected genes') +
@@ -553,20 +531,6 @@ ggplot(lasso_plot[1:25,], aes(x = gene_name, y = abs(coefficient))) +
 
 ## Hierarchical clustering on LASSO features
 ```{r hierarchical_clust, fig.width=7.5}
-#lasso <- read.delim(paste0(dir, "MOFA/Data/lasso_coef.csv"), 
- #                                    sep = ",", header = TRUE)
-# subset to features from LASSO regression
-#vsd <- vsd[rownames(vsd) %in% lasso$ensembl_id,]
-
-# use MEFISTO genes for clustering
-#mefisto_pos <- read.delim(paste0(dir, "MOFA/Data/top_genes_pos_0.1.csv"), 
-#                                     sep = ",", header = TRUE)
-#mefisto_neg <- read.delim(paste0(dir, "MOFA/Data/top_genes_neg_0.1.csv"), 
-#                                     sep = ",", header = TRUE)
-#MEFISTO_genes <- bind_rows(mefisto_pos, mefisto_neg)
-#
-#vsd <- vsd[rowData(vsd)$gene_name %in% MEFISTO_genes$gene,]
-
 sampleDists <- dist(t(assay(vsd[rownames(vsd) %in% lasso$ensembl_id,])))
 sampleDistMatrix <- as.matrix(sampleDists)
 
@@ -578,14 +542,8 @@ age_groups <- data.frame("age_group" = c("1-15", "16-26", "27-60", "61-85", "86-
 annotation %<>% left_join(age_groups) %>% 
   column_to_rownames(var = "sample") %>%
   subset(select = c(Groups))
-#annotation <- pred_age %>% dplyr::rename(Age = predicted_age) %>%
-#  left_join(age_groups) %>%
-#  column_to_rownames(var = "names") %>%
-#  subset(select = age_group)
 
 colors <- colorRampPalette(rev(brewer.pal(9, "Reds")))(255)
-#newCols <- colorRampPalette(grDevices::rainbow(5))
-#annoCol <- newCols(5)
 annoCol <- c('#ffd166', '#ef476f', '#06d6a0', '#118ab2', '#073b4c')
 names(annoCol) <- c("Group 1 (1-15y)", "Group 2 (16-26y)", "Group 3 (27-60y)", "Group 4 (61-85y)", "Group 5 (86-96y)")
 annoCol <- list(Groups = annoCol)
@@ -607,9 +565,6 @@ plot(dend, labels = FALSE)
 
 ```{r cluster_boxplot, fig.width=3, fig.height = 5}
 annotation <- data.frame(subset(colData(vsd), select = c(Age)))
-#annotation <- pred_age %>% dplyr::rename(Age = predicted_age) %>%
-#  left_join(age_groups) %>%
-#  column_to_rownames(var = "names")
 
 ordering <- data.frame('cluster' = c(1, 2, 3, 4, 5, 6), 
                        'ordered_cluster' = c(4, 2, 3, 5, 6, 1)) #to resort the clusters according to the covered age range

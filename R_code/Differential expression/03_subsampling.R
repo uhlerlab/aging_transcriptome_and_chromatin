@@ -10,16 +10,6 @@ library(DESeq2)
 dir <- "/Users/janabraunger/Documents/Studium/Master/Boston/Masterarbeit/"
 
 # define age groups
-#age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
-#                         age_group = c(rep('1-9', 9), rep('10-29', 20), 
-#                                       rep('30-59', 30), rep('60-79', 20),
-#                                       rep('80-89', 10), rep('90-96', 7)))
-
-#age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
-#                         age_group = c(rep('1-15', 15), rep('16-37', 22), 
-#                                       rep('38-57', 20), rep('58-85', 28),
-#                                       rep('86-96', 11)))
-
 age_groups <- data.frame(Age = as.character(seq(1, 96, 1)), 
                          age_group = c(rep('1-15', 15), rep('16-26', 11), 
                                        rep('27-60', 34), rep('61-85', 25),
