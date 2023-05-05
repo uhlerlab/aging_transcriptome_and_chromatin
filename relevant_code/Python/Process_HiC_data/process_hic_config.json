@@ -1,0 +1,13 @@
+{
+  "GENOME_DIR": "/home/braunger/rejuvenation_project/data/genome_data/",
+  "HIC_PLOTS_DIR": "/home/braunger/rejuvenation_project/figures/hic_plots/young_B1R1/",
+  "PROCESSED_HIC_DATA_DIR": "/home/braunger/rejuvenation_project/data/processed_hic_data/",
+  "HIC_CELLTYPE": "Young_B1R1",
+  "HIC_RESOLUTION": 250000,
+  "HIC_QUALITY": "MAPQGE30",
+  "HIC_INTER_NORM": "INTERKR",
+  "HIC_INTRA_NORM": "KR",
+  "chrs": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10 ,11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22],
+  "CENTROMERE_FILTER_SIZE": 2000000, 
+  "SIGMA": 0.3
+}

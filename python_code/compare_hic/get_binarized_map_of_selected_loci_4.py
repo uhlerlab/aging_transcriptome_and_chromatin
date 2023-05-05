@@ -809,10 +809,14 @@ def get_diff_map_non_DE(diff_map, group, updown, data_dir, save_dir, seed):
     
     # Select random non DE genes (same amount per chromosome as in the transition of interest)
     random_genes = pd.DataFrame({'gene': [], 'locus': []})
-    for chrom in range(1, 23):
-        n = chromosome_list.count(str(chrom))
-        genes = all_gene_loci[all_gene_loci['chr_number'] == str(chrom)].sample(n, random_state=seed).sort_index()[['gene', 'locus']]
-        random_genes = pd.concat([random_genes, genes])
+    #for chrom in range(1, 23):
+    #    n = chromosome_list.count(str(chrom))
+    #    genes = all_gene_loci[all_gene_loci['chr_number'] == str(chrom)].sample(n, random_state=seed).sort_index()[['gene', 'locus']]
+    #    random_genes = pd.concat([random_genes, genes])
+    
+    #new line!!!
+    random_genes = all_gene_loci.sample(DE_genes.shape[0], random_state=seed).sort_index()[['gene', 'locus']]
+    
     gene_order = random_genes['gene']
     
     # create diff_map for non DE genes
@@ -841,7 +845,7 @@ def quantify_im_changes(diff_map, group, updown, data_dir, save_dir, young_speci
     
     Args:
         diff_map: (pd DataFrame) diff_map containing all loci
-        group: (string) name of the group ('Group1' or 'Group4_5')
+        group: (string) name of the group ('Group1' or 'Group5')
         updown: (string) select 'up' or 'down' regulated genes
         data_dir: (string) path of the data directory
         save_dir: (string) path of the save directory
@@ -856,46 +860,210 @@ def quantify_im_changes(diff_map, group, updown, data_dir, save_dir, young_speci
         y_im = np.count_nonzero(diff_non_DE.to_numpy() == 1)
         o_im = np.count_nonzero(diff_non_DE.to_numpy() == 2)
         s_im = np.count_nonzero(diff_non_DE.to_numpy() == 3)
-        null_dist = pd.concat([null_dist, pd.DataFrame({'young_im': [y_im], 
-                                                       'old_im': [o_im],
-                                                       'shared_im': [s_im]})])
+        sum_im = y_im + o_im + s_im
+        null_dist = pd.concat([null_dist, pd.DataFrame({'young_im': [y_im / sum_im], 
+                                                       'old_im': [o_im / sum_im],
+                                                       'shared_im': [s_im / sum_im]})])
     # Plot histograms
     fig, axs = plt.subplots(1, 3, figsize = (11, 5))
     axs[0].hist(null_dist['young_im'], bins = 20)
-    axs[0].axvline(young_specific_im, color = 'red')
+    axs[0].axvline(young_specific_im / (young_specific_im + old_specific_im + shared_im), color = 'red')
     axs[0].set_title('Young-specific intermingling') 
     axs[0].set_xlabel('Number of young-specific \n intermingling pixels')
     axs[0].set_ylabel('Number of simulations')
-    p_young = len([y_im for y_im in null_dist['young_im'] if young_specific_im < y_im]) / null_dist.shape[0]
+    p_young = len([y_im for y_im in null_dist['young_im'] if young_specific_im / (young_specific_im + old_specific_im + shared_im) < y_im]) / null_dist.shape[0]
     if p_young == 0:
         axs[0].text(.7, .9, 'p < 0.001', transform=axs[0].transAxes)
     else: 
         axs[0].text(.7, .9, 'p={:.2g}'.format(p_young), transform=axs[0].transAxes)
 
     axs[1].hist(null_dist['old_im'], bins = 20)
-    axs[1].axvline(old_specific_im, color = 'red')
+    axs[1].axvline(old_specific_im / (young_specific_im + old_specific_im + shared_im), color = 'red')
     axs[1].set_title('Old-specific intermingling') 
     axs[1].set_xlabel('Number of old-specific \n intermingling pixels')
     #axs[1].set_ylabel('Number of simulations')
-    p_old = len([o_im for o_im in null_dist['old_im'] if old_specific_im < o_im]) / null_dist.shape[0]
+    p_old = len([o_im for o_im in null_dist['old_im'] if old_specific_im / (young_specific_im + old_specific_im + shared_im) < o_im]) / null_dist.shape[0]
     if p_old == 0:
         axs[1].text(.7, .9, 'p < 0.001', transform=axs[1].transAxes)
     else: 
         axs[1].text(.7, .9, 'p={:.2g}'.format(p_old), transform=axs[1].transAxes)
 
     axs[2].hist(null_dist['shared_im'], bins = 20)
-    axs[2].axvline(shared_im, color = 'red')
+    axs[2].axvline(shared_im / (young_specific_im + old_specific_im + shared_im), color = 'red')
     axs[2].set_title('Shared intermingling') 
     axs[2].set_xlabel('Number of shared \n intermingling pixels')
     #axs[2].set_ylabel('Number of simulations')
-    p_shared = len([s_im for s_im in null_dist['shared_im'] if shared_im < s_im]) / null_dist.shape[0]
+    p_shared = len([s_im for s_im in null_dist['shared_im'] if shared_im / (young_specific_im + old_specific_im + shared_im) < s_im]) / null_dist.shape[0]
     if p_shared == 0:
         axs[2].text(.7, .9, 'p < 0.001', transform=axs[2].transAxes)
     else: 
         axs[2].text(.7, .9, 'p={:.2g}'.format(p_shared), transform=axs[2].transAxes)
 
-
+        
+def get_diff_map_non_DE_chr(diff_map, group, updown, data_dir, save_dir, seed):
+    """ Creates diff map with non DE genes with same numbers of genes per chromosome as in a group
     
+    Args:
+        diff_map: (pd DataFrame) diff_map containing all loci
+        group: (string) name of the group ('Group1' or 'Group4_5')
+        updown: (string) select 'up' or 'down' regulated genes
+        data_dir: (string) path of the data directory
+        save_dir: (string) path of the save directory
+        seed: (int) seed used for random sampling
+    
+    Returns:
+        Sorted diff map with non DE genes (and number of genes with cell state specific intermingling)
+    """
+        
+    # load all gene loci and remove loci of DE genes
+    all_gene_loci = pd.read_csv(data_dir+'genome_data/all_gene_loci.csv')
+    all_gene_loci = all_gene_loci[all_gene_loci['locus'].isin(diff_map.columns)]
+    DE_genes = pd.read_csv(data_dir+'de_data/DE_' + group + '.csv')
+    DE_genes = DE_genes[DE_genes['updown'] == updown]
+    DE_genes = DE_genes.merge(all_gene_loci, on = "gene")
+    all_gene_loci = all_gene_loci[~all_gene_loci['locus'].isin(DE_genes['locus'])]
+    all_gene_loci[['chr','chr_number', 'loc', 'loc_number']]=all_gene_loci.locus.str.split('_',expand=True)
+  
+    # get number of DE genes per chromosome 
+    DE_genes = DE_genes[DE_genes['locus'].isin(diff_map.columns)]
+    chromosome_list = [locus.split("_")[1] for locus in DE_genes['locus']] 
+    
+    # Select random non DE genes (same amount per chromosome as in the transition of interest)
+    random_genes = pd.DataFrame({'gene': [], 'locus': []})
+    for chrom in range(1, 23):
+        n = chromosome_list.count(str(chrom))
+        genes = all_gene_loci[all_gene_loci['chr_number'] == str(chrom)].sample(n, random_state=seed).sort_index()[['gene', 'locus']]
+        random_genes = pd.concat([random_genes, genes])
+    
+    #new line!!!
+    #random_genes = all_gene_loci.sample(DE_genes.shape[0], random_state=seed).sort_index()[['gene', 'locus']]
+    
+    gene_order = random_genes['gene']
+    
+    # create diff_map for non DE genes
+    diff_map_long = diff_map.copy()
+    diff_map_long['loc1'] = diff_map_long.index
+    diff_map_long = pd.melt(diff_map_long, id_vars = 'loc1', var_name = 'loc2')
+    diff_map_long = diff_map_long[diff_map_long['loc1'].isin(random_genes['locus']) & diff_map_long['loc2'].isin(random_genes['locus'])]
+    diff_map_long = random_genes.rename(columns={"gene": "gene1", "locus": "loc1"}).merge(diff_map_long, on = 'loc1')
+    diff_map_long = random_genes.rename(columns={"gene": "gene2", "locus": "loc2"}).merge(diff_map_long, on = 'loc2')
+    diff_map_long = diff_map_long[['gene1', 'gene2', 'value']]
+    diff_map_non_DE = diff_map_long.pivot_table(index='gene1', columns='gene2', values='value')
+    # sorting according to chromosomes
+    diff_map_non_DE = diff_map_non_DE.loc[gene_order, gene_order]
+ 
+    # ordering: first genes with cell-state specific intermingling, then the ones without
+    spec_im_genes = diff_map_non_DE.index[diff_map_non_DE.isin([1,2]).any(axis=1)].tolist()
+    order = [gene for gene in gene_order if gene in spec_im_genes]
+    im_len = len(order)
+    order = order + [gene for gene in gene_order if gene not in order]
+    diff_map_non_DE = diff_map_non_DE.loc[order, order]
+    return(diff_map_non_DE, im_len)
+
+def quantify_im_changes_chr(diff_map, group, updown, data_dir, save_dir, young_specific_im, old_specific_im, shared_im):
+    """ Creates three histograms with the null distribution of the intermingling types in random non DE genes
+    
+    Args:
+        diff_map: (pd DataFrame) diff_map containing all loci
+        group: (string) name of the group ('Group1' or 'Group5')
+        updown: (string) select 'up' or 'down' regulated genes
+        data_dir: (string) path of the data directory
+        save_dir: (string) path of the save directory
+    
+    Returns:
+        Histograms with null distribution and actual value of specific intermingling and p-value
+    """
+    null_dist = pd.DataFrame({'young_im': [], 'old_im': [], 'shared_im': []})
+    for sim in tqdm(range(1000)):
+        time.sleep(0.01)
+        diff_non_DE, im_length = get_diff_map_non_DE_chr(diff_map, group, updown, data_dir, save_dir, 202302+sim)
+        y_im = np.count_nonzero(diff_non_DE.to_numpy() == 1)
+        o_im = np.count_nonzero(diff_non_DE.to_numpy() == 2)
+        s_im = np.count_nonzero(diff_non_DE.to_numpy() == 3)
+        sum_im = y_im + o_im + s_im
+        null_dist = pd.concat([null_dist, pd.DataFrame({'young_im': [y_im / sum_im], 
+                                                       'old_im': [o_im / sum_im],
+                                                       'shared_im': [s_im / sum_im]})])
+    # Plot histograms
+    fig, axs = plt.subplots(1, 3, figsize = (11, 5))
+    axs[0].hist(null_dist['young_im'], bins = 20)
+    axs[0].axvline(young_specific_im / (young_specific_im + old_specific_im + shared_im), color = 'red')
+    axs[0].set_title('Young-specific intermingling') 
+    axs[0].set_xlabel('Number of young-specific \n intermingling pixels')
+    axs[0].set_ylabel('Number of simulations')
+    p_young = len([y_im for y_im in null_dist['young_im'] if young_specific_im / (young_specific_im + old_specific_im + shared_im) < y_im]) / null_dist.shape[0]
+    if p_young == 0:
+        axs[0].text(.7, .9, 'p < 0.001', transform=axs[0].transAxes)
+    else: 
+        axs[0].text(.7, .9, 'p={:.2g}'.format(p_young), transform=axs[0].transAxes)
+
+    axs[1].hist(null_dist['old_im'], bins = 20)
+    axs[1].axvline(old_specific_im / (young_specific_im + old_specific_im + shared_im), color = 'red')
+    axs[1].set_title('Old-specific intermingling') 
+    axs[1].set_xlabel('Number of old-specific \n intermingling pixels')
+    #axs[1].set_ylabel('Number of simulations')
+    p_old = len([o_im for o_im in null_dist['old_im'] if old_specific_im / (young_specific_im + old_specific_im + shared_im) < o_im]) / null_dist.shape[0]
+    if p_old == 0:
+        axs[1].text(.7, .9, 'p < 0.001', transform=axs[1].transAxes)
+    else: 
+        axs[1].text(.7, .9, 'p={:.2g}'.format(p_old), transform=axs[1].transAxes)
+
+    axs[2].hist(null_dist['shared_im'], bins = 20)
+    axs[2].axvline(shared_im / (young_specific_im + old_specific_im + shared_im), color = 'red')
+    axs[2].set_title('Shared intermingling') 
+    axs[2].set_xlabel('Number of shared \n intermingling pixels')
+    #axs[2].set_ylabel('Number of simulations')
+    p_shared = len([s_im for s_im in null_dist['shared_im'] if shared_im / (young_specific_im + old_specific_im + shared_im) < s_im]) / null_dist.shape[0]
+    if p_shared == 0:
+        axs[2].text(.7, .9, 'p < 0.001', transform=axs[2].transAxes)
+    else: 
+        axs[2].text(.7, .9, 'p={:.2g}'.format(p_shared), transform=axs[2].transAxes)
+
+        
+def quantify_im_ratio(diff_map, group, updown, data_dir, save_dir, young_specific_im, old_specific_im, shared_im):
+    """ Creates histogram with the null distribution of the intermingling ratio: young-specific / old-specific
+    
+    Args:
+        diff_map: (pd DataFrame) diff_map containing all loci
+        group: (string) name of the group ('Group1' or 'Group5')
+        updown: (string) select 'up' or 'down' regulated genes
+        data_dir: (string) path of the data directory
+        save_dir: (string) path of the save directory
+    
+    Returns:
+        Histogram with null distribution and actual value of intermingling ratio and p-value
+    """
+    null_dist = pd.DataFrame({'young_im': [], 'old_im': [], 'shared_im': []})
+    for sim in tqdm(range(1000)):
+        time.sleep(0.01)
+        diff_non_DE, im_length = get_diff_map_non_DE(diff_map, group, updown, data_dir, save_dir, 202302+sim)
+        y_im = np.count_nonzero(diff_non_DE.to_numpy() == 1)
+        o_im = np.count_nonzero(diff_non_DE.to_numpy() == 2)
+        s_im = np.count_nonzero(diff_non_DE.to_numpy() == 3)
+        
+        null_dist = pd.concat([null_dist, pd.DataFrame({'young_im': [y_im], 
+                                                       'old_im': [o_im],
+                                                       'shared_im': [s_im]})])
+    null_dist['im_ratio'] = null_dist['young_im'] / (null_dist['old_im']+0.001)
+    
+    # Plot histograms
+    fig, axs = plt.subplots(figsize = (4, 5))
+    axs.hist(null_dist['im_ratio'], bins = 20)
+    axs.axvline(young_specific_im / old_specific_im, color = 'red')
+    axs.set_title('Intermingling ratio of ' + group) 
+    axs.set_xlabel('Number of young-specific / number of \n old-specific intermingling pixels')
+    axs.set_ylabel('Number of simulations')
+    if group in ["Group1_up", "Group5_down"]:
+        p = len([im_ratio for im_ratio in null_dist['im_ratio'] if (young_specific_im / old_specific_im) < im_ratio]) / null_dist.shape[0]
+    else:
+        p = len([im_ratio for im_ratio in null_dist['im_ratio'] if (young_specific_im / old_specific_im) > im_ratio]) / null_dist.shape[0]
+    if p == 0:
+        axs.text(.7, .9, 'p < 0.001', transform=axs.transAxes)
+    else: 
+        axs.text(.7, .9, 'p={:.2g}'.format(p), transform=axs.transAxes)
+
+
+        
 def plot_diff_map_non_DE(diff_map, transition, data_dir, save_dir):
     """ Plots diff map with non DE genes with same numbers of genes per chromosome as in a transition
     

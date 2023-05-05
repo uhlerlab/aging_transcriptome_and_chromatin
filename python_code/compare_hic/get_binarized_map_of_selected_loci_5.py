@@ -238,7 +238,7 @@ def LAS_statistics(chr_list, hic_dir, cell_type, threshold):
     Returns:
         pd DataFrame with number of intermingling regions and LAS submatrices per chr pair
     '''
-    chr_pairs = list(itertools.combinations(chr_list, 2))
+    chr_pairs = list(itertools.combinations(chr_list, 2)) + [(chrom, chrom) for chrom in chr_list]
     hic_intermingling = pd.DataFrame({'chr1': [], 'chr2': [], 'intermingling_regions': [], 'LAS': []})
 
     for pair in chr_pairs:

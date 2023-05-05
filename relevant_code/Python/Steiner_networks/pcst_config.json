@@ -1,0 +1,17 @@
+{
+  "DATA_DIR": "/home/braunger/masterthesis/data/",
+  "SAVE_DIR": "/home/braunger/masterthesis/save/pcst/",
+  "steps": ["27-60_61-85_86-96", "16-26_27-60_61-85", "1-15_16-26_27-60"],
+  "graph_params": {"w": 2,
+                   "b": 2,
+                   "g": 0,
+                   "noise": 0.0, 
+                   "dummy_mode": "terminals", 
+                   "exclude_terminals": "False", 
+                   "seed": 1,
+                   "pruning": "strong",
+                   "verbosity_level": 0},
+  "cell_type": "allTFs", 
+  "p_thr": "200", 
+  "design": 2
+}
