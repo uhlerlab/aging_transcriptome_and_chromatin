@@ -33,6 +33,7 @@ library(glmnet)
 library(EnhancedVolcano)
 library(umap)
 library(biomaRt)
+library(ggpubr)
 ```
 
 This markdown describes the processing of the FASTQ files from the RNAseq data of Fleischer et al., as well as defining age groups and performing a differential expression analysis between consecutive age groups. The selected differentially expressed genes are then used for building Steiner networks.
@@ -620,6 +621,7 @@ upset(fromList(top_list), order.by = "freq",
 ```
 
 # Gene length analysis
+## Group 1 vs. Group 5
 ```{r gene_length_yo}
 groups <- data.frame("group" = c("Upregulated DE genes", "Downregulated DE genes", "Non-DE genes", "Non-DE genes"),
                      "significant" = c("DE genes", "DE genes", "non DE genes", "non DE genes"), 
@@ -675,6 +677,62 @@ t.test(dplyr::filter(gene_lengths, group == "Upregulated DE genes")$gene_length,
        mu = 0, alternative = "greater")
 ```
 
+## Group 1 vs. Group 4 (check for stability)
+
+```{r gene_length_g1_g4}
+groups <- data.frame("group" = c("Upregulated DE genes", "Downregulated DE genes", "Non-DE genes", "Non-DE genes"),
+                     "significant" = c("DE genes", "DE genes", "non DE genes", "non DE genes"), 
+                     "direction" = c("upregulated", "downregulated", "upregulated", "downregulated"))
+
+res <- results(dds, contrast=c("age_group", '61-85', '1-15'))
+res$gene <- rowData(dds)$symbol
+res <- subset(res, select = c(gene,  log2FoldChange, pvalue, padj)) %>%
+  as.data.frame() %>%
+  rownames_to_column(var = "ensembl_gene_id") %>%
+  filter(gene != "") %>%
+  drop_na(padj) %>%
+  mutate(significant = ifelse(padj < 0.05, "DE genes", "non DE genes")) %>%
+  mutate(direction = ifelse(log2FoldChange > 0, "upregulated", "downregulated")) %>%
+  left_join(groups)
+
+# Query gene information from biomart
+genes <- unique(res$ensembl_gene_id)
+mart <- useEnsembl(biomart = "ensembl", dataset = "hsapiens_gene_ensembl")
+gene_lengths <- getBM(filters="ensembl_gene_id", 
+                          attributes=c("ensembl_gene_id", 
+                                       "chromosome_name", "start_position", 
+                                       "end_position", "external_gene_name"), 
+                          values=c(genes), mart=mart) %>%
+  data.frame() %>%
+  group_by(ensembl_gene_id) %>%
+  summarize(chr = dplyr::first(chromosome_name), start = dplyr::first(start_position), 
+            end = dplyr::first(end_position), gene_symbol = dplyr::first(external_gene_name)) %>%
+  mutate(gene_length = end - start) %>%
+  drop_na(gene_length) %>%
+  dplyr::filter(chr %in% as.character(seq(1,22,1))) %>%
+  subset(select = c(ensembl_gene_id, gene_length)) %>%
+  right_join(res)
+
+ggplot(gene_lengths, aes(x = group, y = log(gene_length), fill = group)) +
+  geom_boxplot() +
+  theme_bw() + 
+  xlab("") + ylab("Logarithmic gene length (bp)") +
+  theme(text = element_text(size = 22)) + 
+  theme(axis.text.x = element_blank(), axis.ticks = element_blank()) +
+  scale_fill_manual(values = c('#1565c0', '#999999', '#c62828'))
+```
+
+```{r}
+# T-test for downregulated genes
+t.test(dplyr::filter(gene_lengths, group == "Downregulated DE genes")$gene_length, 
+       dplyr::filter(gene_lengths, group == "Non-DE genes")$gene_length, 
+       mu = 0, alternative = "less")
+
+# T-test for upregulated genes
+t.test(dplyr::filter(gene_lengths, group == "Upregulated DE genes")$gene_length, 
+       dplyr::filter(gene_lengths, group == "Non-DE genes")$gene_length, 
+       mu = 0, alternative = "greater")
+```
 
 # Get loci of all genes
 ```{r all_loci, eval = FALSE}
@@ -706,4 +764,43 @@ data_loci <- gene_annotations %>%
   subset(select = c(gene, locus))
 
 write.csv(data_loci, paste0(dir, "Data/all_gene_loci.csv"), row.names = FALSE)
+```
+
+
+# Sex imbalance: expression comparison in male and female per age group
+```{r gender_imbalance, fig.width=11, fig.height=3}
+# select DE genes
+gse_de <- gse[rownames(gse) %in% foldchanges_filtered$ensembl_id, ]
+
+# get expression for males and females
+males <- gse_de[, colData(gse_de)$Sex == 'Male']
+females <- gse_de[, colData(gse_de)$Sex == 'Female']
+
+# calculate mean per age group
+male_means <- sapply(unique(age_groups$age_group), function(group) {
+    row_means <- rowMeans(assay(males)[, colData(males)$age_group == group])
+    return(row_means)
+})
+colnames(male_means) = c('Group_1', 'Group_2', 'Group_3', 'Group_4', 'Group_5')
+male_means <- male_means %>% data.frame() %>% rownames_to_column(var='gene') %>% 
+  gather(key = 'age_group', value= 'male_expr', -'gene')
+
+female_means <- sapply(unique(age_groups$age_group), function(group) {
+    row_means <- rowMeans(assay(females)[, colData(females)$age_group == group])
+    return(row_means)
+})
+colnames(female_means) = c('Group_1', 'Group_2', 'Group_3', 'Group_4', 'Group_5')
+female_means <- female_means %>% data.frame() %>% rownames_to_column(var='gene') %>% 
+  gather(key = 'age_group', value= 'female_expr', -'gene')
+gender_expr <- left_join(male_means, female_means)
+
+ggplot(gender_expr, aes(x = log2(male_expr), y = log2(female_expr))) +
+  geom_point(size=0.75, alpha = 0.75) +
+  facet_wrap(~age_group, nrow = 1) +
+  geom_smooth(method = "lm") +
+  xlab('log2 counts in males') +
+  ylab('log2 counts in females') +
+  theme_bw() +
+  theme(text = element_text(size = 16)) +
+  stat_cor(method = "pearson", label.x = -2.5, label.y = 14, size = 3.5) 
 ```

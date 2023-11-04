@@ -276,6 +276,80 @@ t.test(dplyr::filter(intermingling_signif, net == "Steiner network S3",
        mu = 0, alternative = "greater")
 ```
 
+
+```{r intermingling_non_targeted_DE_genes, fig.width=18}
+# Instead of a boxplot, make a barplot and add DE genes targeted by no bridge TFs
+im_barplot <- intermingling_signif %>% 
+  bind_rows(data.frame(TF = 'None', net = 'Steiner network S1', adj_pval = 1, 
+                       significant_TFs = 'DE genes not\ntargeted by any\nbridge TF', 
+                       spec_intermingling = 0.0078125, shared_intermingling = 0)) %>%
+  bind_rows(data.frame(TF = 'None', net = 'Steiner network S3', adj_pval = 1, 
+                       significant_TFs = 'DE genes not\ntargeted by any\nbridge TF', 
+                       spec_intermingling = 0.008888888888888889, shared_intermingling = 0))
+im_barplot$significant_TFs[im_barplot$significant_TFs == 'Non significant \n DE targeting'] <- 'DE genes targeted\nby bridge TFs with non\nsignificant DE targeting'
+im_barplot$significant_TFs[im_barplot$significant_TFs == 'Significant \n DE targeting'] <- 'DE genes targeted\nby bridge TFs with\nsignificant DE targeting'
+im_barplot %<>% mutate(significant_TFs = factor(significant_TFs, 
+                                                levels = c('DE genes not\ntargeted by any\nbridge TF',
+                                                           'DE genes targeted\nby bridge TFs with non\nsignificant DE targeting',
+                                                           'DE genes targeted\nby bridge TFs with\nsignificant DE targeting'
+                                                           )))
+
+medians <- im_barplot %>%
+  group_by(net, significant_TFs) %>%
+  summarise(median_value = median(spec_intermingling, na.rm = TRUE))
+
+ggplot(im_barplot, aes(x = significant_TFs, y = spec_intermingling, fill = significant_TFs)) + 
+  geom_bar(data = medians, aes(x = significant_TFs, y = median_value), stat = "identity", width = 0.75) +
+  #geom_jitter(width = 0.15, height = 0, alpha = 0.4, size = 2) +
+  facet_wrap(~net) + 
+  theme_bw() +
+  ylab('% of specific intermingling\nbetween selected DE genes') + 
+  xlab('') +
+  theme(text = element_text(size = 18)) + 
+  scale_fill_manual(values=c("#848484", "#aaaaaa", "#c6d02a"))
+```
+
+```{r intermingling_non_DE, fig.width=10}
+# Intermingling of non-DE genes
+int_young_DE <- read.delim(paste0(dir, "Data/spec_intermingling_random_young.csv"), sep = ",")
+int_old_DE <- read.delim(paste0(dir, "Data/spec_intermingling_random_old.csv"), sep = ",")
+
+intermingling_signif <- TF_centrality_young %>%
+  bind_rows(TF_centrality_old) %>%
+  subset(select = c(TF, net, adj_pval)) %>%
+  mutate(significant_TFs = ifelse(adj_pval < 0.05, 'Significant \n DE targeting', 'Non significant \n DE targeting')) %>%
+  left_join(bind_rows(int_young_DE %>% mutate(net = "young"), int_old_DE %>% mutate(net = "old"))) %>%
+  mutate(net = ifelse(net == 'young', 'Steiner network S1', 'Steiner network S3')) %>%
+  mutate(net = factor(net, levels = c('Steiner network S1', 'Steiner network S3')))
+
+ggplot(intermingling_signif, aes(x = significant_TFs, y = spec_intermingling, fill = significant_TFs)) + 
+  geom_boxplot(outlier.size = 0) + 
+  geom_jitter(width = 0.15, height = 0, alpha = 0.4, size = 2) +
+  facet_wrap(~net) + 
+  theme_bw() +
+  ylab('% of specific intermingling between \n the non-DE target genes per TF') + 
+  xlab('Bridge TFs') +
+  theme(text = element_text(size = 18)) + 
+  scale_fill_manual(values=c("#aaaaaa", "#c6d02a"))
+```
+
+```{r}
+# T-test for young
+t.test(dplyr::filter(intermingling_signif, net == "Steiner network S1", 
+                     significant_TFs == 'Significant \n DE targeting')$spec_intermingling, 
+       dplyr::filter(intermingling_signif, net == "Steiner network S1", 
+                     significant_TFs == 'Non significant \n DE targeting')$spec_intermingling, 
+       mu = 0, alternative = "greater")
+
+# T-test for old
+t.test(dplyr::filter(intermingling_signif, net == "Steiner network S3", 
+                     significant_TFs == 'Significant \n DE targeting')$spec_intermingling, 
+       dplyr::filter(intermingling_signif, net == "Steiner network S3", 
+                     significant_TFs == 'Non significant \n DE targeting')$spec_intermingling, 
+       mu = 0, alternative = "greater")
+```
+
+
 # Number of TFs targeting each DE gene
 ```{r n_TFs_per_gene, fig.width = 10}
 target_counts_young <- read.delim(paste0(dir, "Data/n_TFs_per_young_DE_gene.csv"), sep = ",") %>%
