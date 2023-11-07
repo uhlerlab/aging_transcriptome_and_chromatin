@@ -8,7 +8,7 @@ import matplotlib as mpl
 mpl.use('Agg')
 import matplotlib.pyplot as plt
 from matplotlib.patches import Patch
-from matplotlib.colors import ListedColormap
+from matplotlib.colors import ListedColormap, LinearSegmentedColormap
 plt.ioff()
 import seaborn as sns
 import pandas as pd
@@ -253,9 +253,10 @@ def LAS_statistics(chr_list, hic_dir, cell_type, threshold):
             if (len(df_intermingling) > 0):
                 intermingling_regions = bin_intermingling_regions_hic_resoln(df_intermingling, chr1, chr2, 250000)
                 
-                hic_intermingling = hic_intermingling.append({'chr1': chr1, 'chr2': chr2, 
-                                                              'intermingling_regions': intermingling_regions.shape[0], 
-                                                              'LAS': len(df_intermingling)}, ignore_index = True)
+                hic_intermingling = pd.concat([hic_intermingling, 
+                                               pd.DataFrame({'chr1': [chr1], 'chr2': [chr2], 
+                                                             'intermingling_regions': [intermingling_regions.shape[0]], 
+                                                             'LAS': [len(df_intermingling)]})], ignore_index = True)
     return hic_intermingling
     
     
@@ -549,7 +550,6 @@ def diff_map_sig(diff_map, group, updown, data_dir, save_dir):
     im_len = len(order)
     order = order + [gene for gene in gene_order if gene not in order]
     DE_diff_map = DE_diff_map.loc[order, order]
-    print(DE_diff_map.shape)
 
     palette = sns.color_palette("tab10")
     colors = ['whitesmoke', 'blue', 'magenta', 'lightgrey']
@@ -804,6 +804,43 @@ def diff_map_TF_transition(diff_map, TF, transition, name, data_dir, save_dir):
     g = sns.heatmap(TF_diff_map, cmap = cmap, xticklabels=False, yticklabels=False)
     plt.ylabel('') 
     plt.title('Intermingling differences for ' + TF + ' in the ' + name + ' network')
+    
+
+def diff_map_DE_strength(diff_map, diff_strength, group, updown, data_dir, save_dir):
+    """ Plots diff map with all up- or downregulated DE genes of one group
+    
+    Args:
+        diff_map: (pd DataFrame) diff_map containing all loci
+        diff_strength: (pd DataFrame) same loci as diff map but with difference of young vs. old LAS score
+        group: (string) name of the group (e.g. 'Group1_up')
+        updown: (string) select 'up' or 'down' regulated genes
+        data_dir: (string) path of the data directory
+        save_dir: (string) path of the save directory
+    
+    Returns:
+        Sorted diff map with DE genes
+    """
+    DE_diff_map = get_diff_map_sig(diff_map, group, updown, data_dir, save_dir)
+    DE_diff_strength = get_diff_map_sig(diff_strength, group, updown, data_dir, save_dir)
+    gene_order = DE_diff_map.columns
+    
+    # select genes with cell-state specific intermingling
+    spec_im_genes = DE_diff_map.index[DE_diff_map.isin([1,2]).any(axis=1)].tolist()
+    order = [gene for gene in gene_order if gene in spec_im_genes]
+    
+    # remove differences for shared intermingling
+    DE_diff_strength[DE_diff_map == 3] = 0
+    DE_diff_strength[DE_diff_map == 0] = 0
+    DE_diff_strength = DE_diff_strength.loc[order, order]
+
+    colors = [(1.0, 0.0, 1.0), (0.95, 0.95, 0.95), (0.0, 0.0, 1.0)]  
+    cmap = LinearSegmentedColormap.from_list('custom_colormap', colors, N=256)
+    
+    plt.figure(figsize = (6,5))
+    g = sns.heatmap(DE_diff_strength, cmap = cmap, xticklabels=False, yticklabels=False, vmin = -10, vmax = 10)
+    plt.ylabel('') 
+    plt.xlabel('')
+    plt.title('Intermingling of DE genes in ' + group)
     
 
 def create_interactive_net_json(diff_map, TF, network, data_dir, save_dir):
